@@ -44,7 +44,7 @@ contexts.
   - `Offset`
 * a helper struct `CpuSlab` which wraps `Vec<u32>` or `WgpuBuffer`
 * a feature-gated helper for using slabs with `wgpu` - `WgpuBuffer`
-  - [example](src/wgpu_slab.rs#L344)
+  - [example](https://github.com/schell/crabslab/blob/main/crates/crabslab/src/wgpu_slab.rs#L356)
 
 # Example
 ```rust
