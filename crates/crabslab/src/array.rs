@@ -25,6 +25,18 @@ impl<T: SlabItem> Iterator for ArrayIter<T> {
 }
 
 /// A pointer to contiguous `T` elements in a slab.
+///
+/// ```rust
+/// use crabslab::{Array, CpuSlab, GrowableSlab, Id, Slab, SlabItem};
+///
+/// let ints = [1, 2, 3, 4, 5u32];
+/// let mut slab = CpuSlab::new(vec![]);
+/// let array = slab.append_array(&ints);
+/// for (i, id) in array.iter().enumerate() {
+///     let value = slab.read(id);
+///     assert_eq!(ints[i], value);
+/// }
+/// ```
 #[repr(C)]
 pub struct Array<T> {
     // u32 offset in the slab

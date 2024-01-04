@@ -69,7 +69,33 @@ fn get_params(input: &DeriveInput) -> syn::Result<Params> {
     })
 }
 
-/// Derives [`SlabItem`] for a struct.
+/// Derives `SlabItem` for a struct. Currently only
+/// structs are supported.
+///
+/// This will also implement `offset_of_{field}` functions for each field,
+/// which returns the offset of that field relative to the start of the struct.
+///
+/// ```rust
+/// use crabslab::{CpuSlab, GrowableSlab, Slab, SlabItem};
+///
+/// #[derive(Debug, Default, PartialEq, SlabItem)]
+/// struct Foo {
+///     a: u32,
+///     b: u32,
+///     c: u32,
+/// }
+///
+/// let foo_one = Foo { a: 1, b: 2, c: 3 };
+/// let foo_two = Foo { a: 4, b: 5, c: 6 };
+///
+/// let mut slab = CpuSlab::new(vec![]);
+/// let foo_one_id = slab.append(&foo_one);
+/// let foo_two_id = slab.append(&foo_two);
+///
+/// // Overwrite the second item of the second `Foo`:
+/// slab.write(foo_two_id + Foo::offset_of_b(), &42);
+/// assert_eq!(Foo { a: 4, b: 42, c: 6 }, slab.read(foo_two_id));
+/// ```
 #[proc_macro_derive(SlabItem)]
 pub fn derive_from_slab(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: DeriveInput = syn::parse_macro_input!(input);

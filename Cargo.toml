@@ -3,3 +3,5 @@ members = [
     "crates/crabslab",
     "crates/crabslab-derive"
 ]
+
+resolver = "2"

@@ -1,6 +1,6 @@
 #![cfg_attr(target_arch = "spirv", no_std)]
 //! Creating and crafting a tasty slab of memory.
-#![doc = include_str!("../../../README.md")]
+#![doc = include_str!("../README.md")]
 
 mod array;
 pub use array::*;
