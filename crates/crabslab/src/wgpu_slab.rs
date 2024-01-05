@@ -309,7 +309,7 @@ mod test {
 
     use super::*;
 
-    fn get_device_and_queue() -> (wgpu::Device, wgpu::Queue) {
+    fn get_device_and_queue() -> Option<(wgpu::Device, wgpu::Queue)> {
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
         let backends = wgpu::Backends::all();
@@ -326,8 +326,7 @@ mod test {
                 compatible_surface: None,
                 force_fallback_adapter: false,
             },
-        ))
-        .unwrap();
+        ))?;
 
         let info = adapter.get_info();
         log::trace!(
@@ -349,12 +348,17 @@ mod test {
             },
             None, // Trace path
         ))
-        .unwrap()
+        .ok()
     }
 
     #[test]
     fn slab_buffer_roundtrip() {
-        let (device, queue) = get_device_and_queue();
+        let (device, queue) = if let Some(dq) = get_device_and_queue() {
+            dq
+        } else {
+            println!("skipping test, can't access any GPU");
+            return;
+        };
         let buffer = WgpuBuffer::new(device, queue, 2);
         let mut slab = CpuSlab::new(buffer);
         slab.append(&42);
