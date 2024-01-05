@@ -32,6 +32,10 @@ Even though this crate was written with `rust-gpu` in mind, it should work in ot
 contexts.
 
 ## And How
+The idea is simple - `crabslab` helps you manage a heap of contiguous `u32`s (roughly in the form of `Vec<u32>`). 
+Types implement the trait `SlabItem` which writes the type into an index of the slab as contiguous `u32`s and also 
+reads them out symmetrically. 
+
 `crabslab` includes:
 * a few traits:
   - `Slab`
@@ -42,9 +46,10 @@ contexts.
   - `Id`
   - `Array`
   - `Offset`
-* a helper struct `CpuSlab` which wraps `Vec<u32>` or `WgpuBuffer`
+* a helper struct `CpuSlab` which wraps anything implementing `GrowableSlab`
 * a feature-gated helper for using slabs with `wgpu` - `WgpuBuffer`
   - [example](https://github.com/schell/crabslab/blob/main/crates/crabslab/src/wgpu_slab.rs#L356)
+* feature for deriving `SlabItem` for `glam` types
 
 # Example
 ```rust
