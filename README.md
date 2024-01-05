@@ -41,7 +41,7 @@ reads them out symmetrically.
   - `Slab`
   - `GrowableSlab`
   - `SlabItem`
-* a derive macro for `SlabItem` for your structs
+* a derive macro for `SlabItem` for your types
 * a few new structs for working with slabs
   - `Id`
   - `Array`
