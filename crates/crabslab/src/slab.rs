@@ -234,11 +234,10 @@ impl SlabItem for glam::Vec4 {
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        let Self { x, y, z, w } = self;
-        let index = x.write_slab(index, slab);
-        let index = y.write_slab(index, slab);
-        let index = z.write_slab(index, slab);
-        w.write_slab(index, slab)
+        let index = self.x.write_slab(index, slab);
+        let index = self.y.write_slab(index, slab);
+        let index = self.z.write_slab(index, slab);
+        self.w.write_slab(index, slab)
     }
 }
 
@@ -248,19 +247,17 @@ impl SlabItem for glam::Quat {
     }
 
     fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let Self { x, y, z, w } = self;
-        let index = x.read_slab(index, slab);
-        let index = y.read_slab(index, slab);
-        let index = z.read_slab(index, slab);
-        w.read_slab(index, slab)
+        let index = self.x.read_slab(index, slab);
+        let index = self.y.read_slab(index, slab);
+        let index = self.z.read_slab(index, slab);
+        self.w.read_slab(index, slab)
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        let Self { x, y, z, w } = self;
-        let index = x.write_slab(index, slab);
-        let index = y.write_slab(index, slab);
-        let index = z.write_slab(index, slab);
-        w.write_slab(index, slab)
+        let index = self.x.write_slab(index, slab);
+        let index = self.y.write_slab(index, slab);
+        let index = self.z.write_slab(index, slab);
+        self.w.write_slab(index, slab)
     }
 }
 
