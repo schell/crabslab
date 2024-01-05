@@ -8,9 +8,7 @@ use crate::{array::Array, id::Id};
 /// and how to read/write it from/to the slab.
 ///
 /// `SlabItem` can be automatically derived for struct and tuple types,
-/// so long as those types are relatively simple. So far, autoderiving
-/// fields with these types will **not compile** on one or more targets:
-/// * `PhantomData<T>` - will not compile on `target_arch = "spirv"`
+/// so long as those types' fields implement `SlabItem`.
 pub trait SlabItem: core::any::Any + Sized {
     /// The number of `u32`s this type occupies in a slab of `&[u32]`.
     fn slab_size() -> usize;
@@ -458,12 +456,11 @@ pub trait GrowableSlab: Slab {
     /// Returns the previous length.
     fn increment_len(&mut self, n: usize) -> usize;
 
-
     /// Expands the slab to fit the given number of `T`s, if necessary.
     fn maybe_expand_to_fit<T: SlabItem>(&mut self, len: usize) {
         let size = T::slab_size();
         let capacity = self.capacity();
-        //log::trace!(
+        // log::trace!(
         //    "append_slice: {size} * {ts_len} + {len} ({}) >= {capacity}",
         //    size * ts_len + len
         //);
