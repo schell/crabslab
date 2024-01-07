@@ -145,7 +145,10 @@ impl<T> Id<T> {
     }
 }
 
-/// The slab offset of a struct's field.
+/// The slab offset of field `F` within a type `T`.
+///
+/// An offset `Offset<F, T>` can be added to an [`Id<T>`](Id) to get an
+/// [`Id<F>`].
 ///
 /// Offset functions are automatically derived for [`SlabItem`] structs.
 ///
@@ -172,12 +175,49 @@ impl<T> Id<T> {
 /// let a = slab.read(parent_id + Parent::offset_of_child_a());
 /// assert_eq!(42, a);
 /// ```
-pub struct Offset<T> {
+///
+/// Furthermore, offsets cannot be added unless their types are compatible.
+/// This helps when chaining together offsets to drill down through a struct:
+///
+/// ```rust, compile_fail
+/// use crabslab::*;
+///
+/// #[derive(Debug, Default, PartialEq, SlabItem)]
+/// pub struct Child {
+///     pub value: u32,
+/// }
+///
+/// #[derive(Debug, Default, PartialEq, SlabItem)]
+/// pub struct Changeling {
+///     pub value: u32,
+/// }
+///
+/// #[derive(Debug, Default, PartialEq, SlabItem)]
+/// pub struct Parent {
+///     pub child: Child,
+/// }
+///
+/// let mut slab = CpuSlab::new(vec![]);
+/// let parent_id = slab.append(&Parent::default());
+///
+/// // This will write `42` into the `value` field of the `Child` struct:
+/// slab.write(
+///     (parent_id + Parent::offset_of_child()) + Child::offset_of_value(),
+///     &42u32,
+/// );
+///
+/// // This will not compile:
+/// slab.write(
+///     (parent_id + Parent::offset_of_child()) + Changeling::offset_of_value(),
+///     &666u32,
+/// );
+/// ```
+pub struct Offset<F, T> {
     pub offset: u32,
-    _phantom: PhantomData<T>,
+    _phantom: PhantomData<(F, T)>,
 }
 
-impl<F, T> core::ops::Add<Id<T>> for Offset<F> {
+impl<F, T> core::ops::Add<Id<T>> for Offset<F, T> {
     type Output = Id<F>;
 
     fn add(self, rhs: Id<T>) -> Self::Output {
@@ -185,21 +225,21 @@ impl<F, T> core::ops::Add<Id<T>> for Offset<F> {
     }
 }
 
-impl<F, T> core::ops::Add<Offset<F>> for Id<T> {
+impl<F, T> core::ops::Add<Offset<F, T>> for Id<T> {
     type Output = Id<F>;
 
-    fn add(self, rhs: Offset<F>) -> Self::Output {
+    fn add(self, rhs: Offset<F, T>) -> Self::Output {
         Id::new(self.0 + rhs.offset)
     }
 }
 
-impl<T> From<Offset<T>> for Id<T> {
-    fn from(value: Offset<T>) -> Self {
+impl<F, T> From<Offset<F, T>> for Id<F> {
+    fn from(value: Offset<F, T>) -> Self {
         Id::new(value.offset)
     }
 }
 
-impl<T> Offset<T> {
+impl<F, T> Offset<F, T> {
     pub const fn new(offset: usize) -> Self {
         Self {
             offset: offset as u32,

@@ -1,6 +1,6 @@
 [package]
 name = "crabslab-derive"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2021"
 description = "Slab allocator focused on GPU compute (rust-gpu)"
 repository = "https://github.com/schell/renderling"

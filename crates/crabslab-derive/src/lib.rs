@@ -460,7 +460,7 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
             FieldName::Ident(field) => Ident::new(&format!("offset_of_{}", field), field.span()),
         };
         offsets.push(quote! {
-            pub fn #ident() -> crabslab::Offset<#ty> {
+            pub fn #ident() -> crabslab::Offset<#ty, Self> {
                 crabslab::Offset::new(
                     #(<#offset_tys as crabslab::SlabItem>::slab_size()+)*
                     0
