@@ -1,3 +1,4 @@
+#![feature(macro_metavar_expr)]
 #![cfg_attr(target_arch = "spirv", no_std)]
 //! Creating and crafting a tasty slab of memory.
 #![doc = include_str!("../README.md")]
@@ -15,5 +16,7 @@ pub use slab::*;
 mod wgpu_slab;
 #[cfg(feature = "wgpu")]
 pub use wgpu_slab::*;
+
+pub mod impl_slab_item;
 
 pub use crabslab_derive::SlabItem;

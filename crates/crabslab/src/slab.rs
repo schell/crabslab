@@ -1,5 +1,5 @@
 //! Slab traits.
-use core::{default::Default, marker::PhantomData};
+use core::default::Default;
 pub use crabslab_derive::SlabItem;
 
 use crate::{array::Array, id::Id};
@@ -28,318 +28,7 @@ pub trait SlabItem: core::any::Any + Sized {
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize;
 }
 
-impl SlabItem for bool {
-    fn slab_size() -> usize {
-        1
-    }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let mut proxy = 0u32;
-        let index = proxy.read_slab(index, slab);
-        *self = proxy == 1;
-        index
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        if *self { 1u32 } else { 0u32 }.write_slab(index, slab)
-    }
-}
-
-impl SlabItem for u32 {
-    fn slab_size() -> usize {
-        1
-    }
-
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        if slab.len() > index {
-            *self = slab[index];
-            index + 1
-        } else {
-            index
-        }
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        if slab.len() > index {
-            slab[index] = *self;
-            index + 1
-        } else {
-            index
-        }
-    }
-}
-
-impl SlabItem for f32 {
-    fn slab_size() -> usize {
-        1
-    }
-
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        if slab.len() > index {
-            *self = f32::from_bits(slab[index]);
-            index + 1
-        } else {
-            index
-        }
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        if slab.len() > index {
-            slab[index] = self.to_bits();
-            index + 1
-        } else {
-            index
-        }
-    }
-}
-
-impl<T: SlabItem + Default> SlabItem for Option<T> {
-    fn slab_size() -> usize {
-        1 + T::slab_size()
-    }
-
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let mut proxy = 0u32;
-        let index = proxy.read_slab(index, slab);
-        if proxy == 1 {
-            let mut t = T::default();
-            let index = t.read_slab(index, slab);
-            *self = Some(t);
-            index
-        } else {
-            *self = None;
-            index + T::slab_size()
-        }
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        if let Some(t) = self {
-            let index = 1u32.write_slab(index, slab);
-            t.write_slab(index, slab)
-        } else {
-            let index = 0u32.write_slab(index, slab);
-            index + T::slab_size()
-        }
-    }
-}
-
-impl<T: SlabItem, const N: usize> SlabItem for [T; N] {
-    fn slab_size() -> usize {
-        <T as SlabItem>::slab_size() * N
-    }
-
-    fn read_slab(&mut self, mut index: usize, slab: &[u32]) -> usize {
-        for i in 0..N {
-            index = self[i].read_slab(index, slab);
-        }
-        index
-    }
-
-    fn write_slab(&self, mut index: usize, slab: &mut [u32]) -> usize {
-        for i in 0..N {
-            index = self[i].write_slab(index, slab);
-        }
-        index
-    }
-}
-
-#[cfg(feature = "glam")]
-impl SlabItem for glam::Mat4 {
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let Self {
-            x_axis,
-            y_axis,
-            z_axis,
-            w_axis,
-        } = self;
-        let index = x_axis.read_slab(index, slab);
-        let index = y_axis.read_slab(index, slab);
-        let index = z_axis.read_slab(index, slab);
-        w_axis.read_slab(index, slab)
-    }
-
-    fn slab_size() -> usize {
-        16
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        let Self {
-            x_axis,
-            y_axis,
-            z_axis,
-            w_axis,
-        } = self;
-        let index = x_axis.write_slab(index, slab);
-        let index = y_axis.write_slab(index, slab);
-        let index = z_axis.write_slab(index, slab);
-        w_axis.write_slab(index, slab)
-    }
-}
-
-#[cfg(feature = "glam")]
-impl SlabItem for glam::Vec2 {
-    fn slab_size() -> usize {
-        2
-    }
-
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        index
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        if slab.len() < index + 2 {
-            return index;
-        }
-        let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        index
-    }
-}
-
-impl SlabItem for glam::Vec3 {
-    fn slab_size() -> usize {
-        3
-    }
-
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let Self { x, y, z } = self;
-        let index = x.read_slab(index, slab);
-        let index = y.read_slab(index, slab);
-        let index = z.read_slab(index, slab);
-        index
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        let Self { x, y, z } = self;
-        let index = x.write_slab(index, slab);
-        let index = y.write_slab(index, slab);
-        let index = z.write_slab(index, slab);
-        index
-    }
-}
-
-#[cfg(feature = "glam")]
-impl SlabItem for glam::Vec4 {
-    fn slab_size() -> usize {
-        4
-    }
-
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        let index = self.z.read_slab(index, slab);
-        self.w.read_slab(index, slab)
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        let index = self.z.write_slab(index, slab);
-        self.w.write_slab(index, slab)
-    }
-}
-
-impl SlabItem for glam::Quat {
-    fn slab_size() -> usize {
-        16
-    }
-
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        let index = self.z.read_slab(index, slab);
-        self.w.read_slab(index, slab)
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        let index = self.z.write_slab(index, slab);
-        self.w.write_slab(index, slab)
-    }
-}
-
-#[cfg(feature = "glam")]
-impl SlabItem for glam::UVec2 {
-    fn slab_size() -> usize {
-        2
-    }
-
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        index
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        index
-    }
-}
-
-#[cfg(feature = "glam")]
-impl SlabItem for glam::UVec3 {
-    fn slab_size() -> usize {
-        3
-    }
-
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        let index = self.z.read_slab(index, slab);
-        index
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        let index = self.z.write_slab(index, slab);
-        index
-    }
-}
-
-#[cfg(feature = "glam")]
-impl SlabItem for glam::UVec4 {
-    fn slab_size() -> usize {
-        4
-    }
-
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        let index = self.z.read_slab(index, slab);
-        let index = self.w.read_slab(index, slab);
-        index
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        if slab.len() < index + 4 {
-            return index;
-        }
-        let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        let index = self.z.write_slab(index, slab);
-        let index = self.w.write_slab(index, slab);
-        index
-    }
-}
-
-impl<T: core::any::Any> SlabItem for PhantomData<T> {
-    fn slab_size() -> usize {
-        0
-    }
-
-    fn read_slab(&mut self, index: usize, _: &[u32]) -> usize {
-        index
-    }
-
-    fn write_slab(&self, index: usize, _: &mut [u32]) -> usize {
-        index
-    }
-}
 
 /// Trait for slabs of `u32`s that can store many types.
 pub trait Slab {
@@ -633,7 +322,9 @@ mod test {
         slab.write_indexed_slice(&[1, 2, 3, 4], 2);
         let t: Vec<u32> = slab.read_vec(Array::new(2, 4));
         assert_eq!([1, 2, 3, 4], t[..]);
-        slab.write_indexed_slice(&[[1.0, 2.0, 3.0, 4.0], [5.5, 6.5, 7.5, 8.5]], 0);
+
+        //use _f32 explicit, otherwise it fails
+        slab.write_indexed_slice(&[[1.0_f32, 2.0, 3.0, 4.0], [5.5, 6.5, 7.5, 8.5]], 0);
 
         let arr = Array::<[f32; 4]>::new(0, 2);
         assert_eq!(Id::new(0), arr.at(0));
@@ -711,4 +402,18 @@ mod test {
         let f32_vec = slab.read_vec(array);
         assert_eq!(f32s, f32_vec[..]);
     }
+
+    #[test]
+    fn tuples_and_all_primitives() {
+        let mut slab = CpuSlab::new(vec![]);
+        let buffer1 = (-5_i8, 5u8, -5_i16, 5u16, -5_i32, 5u32);
+        let buffer2 = (-5_i64, 5u64, -5_i128, 5u128, false, 1.0_f32, 1.0_f64);
+
+        let id1 = slab.append(&buffer1);
+        let id2 = slab.append(&buffer2);
+
+        assert_eq!(buffer1, slab.read(id1));
+        assert_eq!(buffer2, slab.read(id2));
+    }
+
 }
