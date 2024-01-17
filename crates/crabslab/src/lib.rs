@@ -16,4 +16,6 @@ mod wgpu_slab;
 #[cfg(feature = "wgpu")]
 pub use wgpu_slab::*;
 
+pub mod impl_slab_item;
+
 pub use crabslab_derive::SlabItem;
