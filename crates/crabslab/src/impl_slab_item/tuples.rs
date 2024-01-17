@@ -1,33 +1,16 @@
-use crate::SlabItem;
-
-macro_rules! impl_tuples {
-
-    ($($generic: tt),+) => {
-        impl<$($generic),+,> SlabItem for ($($generic),+,)
-        where
-            $($generic: SlabItem),+,
-        {
-            fn slab_size() -> usize {
-                $($generic::slab_size() +)+ 0
-            }
-            fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-                $(${ignore(generic)} let index = self.${index()}.read_slab(index, slab);)+
-                index
-            }
-            fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-                $(${ignore(generic)} let index = self.${index()}.write_slab(index, slab);)+
-                index
-            }
-        }
-
-        impl_tuples!(@pop $($generic),+);
-    };
-
-    (@pop $_: tt, $($generic: tt),+) => {
-        impl_tuples!($($generic),+);
-    };
-    (@pop $_: tt) => {};
-}
+use crate as crabslab;
 
 // Rust tuples only implement Default for up to 12 elements, as of now
-impl_tuples!(M, L, J, I, H, G, F, E, D, C, B, A);
+crabslab_derive::impl_slabitem_tuples!((A,));
+crabslab_derive::impl_slabitem_tuples!((A, B));
+crabslab_derive::impl_slabitem_tuples!((A, B, C));
+crabslab_derive::impl_slabitem_tuples!((A, B, C, D));
+crabslab_derive::impl_slabitem_tuples!((A, B, C, D, E));
+crabslab_derive::impl_slabitem_tuples!((A, B, C, D, E, F));
+crabslab_derive::impl_slabitem_tuples!((A, B, C, D, E, F, G));
+crabslab_derive::impl_slabitem_tuples!((A, B, C, D, E, F, G, H));
+crabslab_derive::impl_slabitem_tuples!((A, B, C, D, E, F, G, H, I));
+crabslab_derive::impl_slabitem_tuples!((A, B, C, D, E, F, G, H, I, J));
+crabslab_derive::impl_slabitem_tuples!((A, B, C, D, E, F, G, H, I, J, K));
+crabslab_derive::impl_slabitem_tuples!((A, B, C, D, E, F, G, H, I, J, K, L));
+crabslab_derive::impl_slabitem_tuples!((A, B, C, D, E, F, G, H, I, J, K, L, M));

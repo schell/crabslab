@@ -2,7 +2,7 @@
 use quote::quote;
 use syn::{
     spanned::Spanned, Data, DataEnum, DataStruct, DeriveInput, Fields, FieldsNamed, FieldsUnnamed,
-    Ident, Index, Type, WhereClause, WherePredicate,
+    Ident, Index, Type, TypeTuple, WhereClause, WherePredicate,
 };
 
 enum FieldName {
@@ -501,6 +501,36 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
 
                 #(#write_index_field_names)*
 
+                index
+            }
+        }
+    };
+    output.into()
+}
+
+#[proc_macro]
+pub fn impl_slabitem_tuples(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let tuple: TypeTuple = syn::parse_macro_input!(input);
+    let tys = tuple.elems.iter().collect::<Vec<_>>();
+    let indices = tys
+        .iter()
+        .enumerate()
+        .map(|(i, _)| Index::from(i))
+        .collect::<Vec<_>>();
+    let output = quote! {
+        impl<#(#tys),*> crabslab::SlabItem for #tuple
+        where
+            #(#tys: crabslab::SlabItem),*,
+        {
+            fn slab_size() -> usize {
+                #(#tys::slab_size() +)* 0
+            }
+            fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
+                #(let index = self.#indices.read_slab(index, slab);)*
+                index
+            }
+            fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
+                #(let index = self.#indices.write_slab(index, slab);)*
                 index
             }
         }

@@ -1,4 +1,3 @@
-#![feature(macro_metavar_expr)]
 #![cfg_attr(target_arch = "spirv", no_std)]
 //! Creating and crafting a tasty slab of memory.
 #![doc = include_str!("../README.md")]
