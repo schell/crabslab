@@ -1,7 +1,4 @@
-
 use crate::SlabItem;
-
-
 
 macro_rules! impl_underflow_primitive {
     ($type: ty) => {
@@ -9,7 +6,7 @@ macro_rules! impl_underflow_primitive {
             fn slab_size() -> usize {
                 1
             }
-        
+
             fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
                 if slab.len() > index {
                     *self = slab[index] as $type;
@@ -18,7 +15,7 @@ macro_rules! impl_underflow_primitive {
                     index
                 }
             }
-        
+
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
                 if slab.len() > index {
                     slab[index] = *self as u32;
@@ -30,7 +27,6 @@ macro_rules! impl_underflow_primitive {
         }
     };
 }
-
 
 macro_rules! impl_overflow_primitive {
     ($type: ty, $num_slots: expr) => {
@@ -64,8 +60,6 @@ macro_rules! impl_overflow_primitive {
     };
 }
 
-
-
 impl_underflow_primitive!(u8);
 impl_underflow_primitive!(i8);
 impl_underflow_primitive!(u16);
@@ -77,9 +71,6 @@ impl_overflow_primitive!(u64, 2);
 impl_overflow_primitive!(i64, 2);
 impl_overflow_primitive!(u128, 4);
 impl_overflow_primitive!(i128, 4);
-
-
-
 
 impl SlabItem for f32 {
     fn slab_size() -> usize {
@@ -122,7 +113,6 @@ impl SlabItem for f64 {
         temp_u64.write_slab(index, slab)
     }
 }
-
 
 impl SlabItem for bool {
     fn slab_size() -> usize {

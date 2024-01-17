@@ -1,6 +1,4 @@
-
 use crate::SlabItem;
-
 
 impl SlabItem for glam::Mat4 {
     fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {

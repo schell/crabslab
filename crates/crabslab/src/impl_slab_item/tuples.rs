@@ -1,7 +1,4 @@
-
-
 use crate::SlabItem;
-
 
 macro_rules! impl_tuples {
 
@@ -32,5 +29,5 @@ macro_rules! impl_tuples {
     (@pop $_: tt) => {};
 }
 
-//Rust tuples only implement Default for up to 12 elements, as of now
+// Rust tuples only implement Default for up to 12 elements, as of now
 impl_tuples!(M, L, J, I, H, G, F, E, D, C, B, A);

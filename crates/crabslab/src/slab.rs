@@ -28,8 +28,6 @@ pub trait SlabItem: core::any::Any + Sized {
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize;
 }
 
-
-
 /// Trait for slabs of `u32`s that can store many types.
 pub trait Slab {
     /// Return the number of u32 elements in the slab.
@@ -323,7 +321,7 @@ mod test {
         let t: Vec<u32> = slab.read_vec(Array::new(2, 4));
         assert_eq!([1, 2, 3, 4], t[..]);
 
-        //use _f32 explicit, otherwise it fails
+        // use _f32 explicit, otherwise it fails
         slab.write_indexed_slice(&[[1.0_f32, 2.0, 3.0, 4.0], [5.5, 6.5, 7.5, 8.5]], 0);
 
         let arr = Array::<[f32; 4]>::new(0, 2);
@@ -415,5 +413,4 @@ mod test {
         assert_eq!(buffer1, slab.read(id1));
         assert_eq!(buffer2, slab.read(id2));
     }
-
 }

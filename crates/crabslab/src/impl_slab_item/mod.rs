@@ -1,16 +1,10 @@
-
-
 mod primitives;
 mod tuples;
 
 #[cfg(feature = "glam")]
 mod glam;
 
-
-
-
 use crate::SlabItem;
-
 
 impl<T: SlabItem + Default> SlabItem for Option<T> {
     fn slab_size() -> usize {
@@ -61,7 +55,6 @@ impl<T: SlabItem, const N: usize> SlabItem for [T; N] {
         index
     }
 }
-
 
 use core::marker::PhantomData;
 
