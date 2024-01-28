@@ -246,12 +246,29 @@ impl WgpuBuffer {
 
     #[cfg(feature = "futures-lite")]
     /// Read from the slab buffer synchronously.
-    pub fn block_on_read_raw(&self, start: usize, len: usize) -> Result<Vec<u32>, WgpuSlabError> {
-        futures_lite::future::block_on(self.read_raw(start, len))
+    pub fn block_on_read_raw(
+        &self,
+        range: impl std::ops::RangeBounds<usize>,
+    ) -> Result<Vec<u32>, WgpuSlabError> {
+        futures_lite::future::block_on(self.read_raw(range))
     }
 
     /// Read from the slab buffer.
-    pub async fn read_raw(&self, start: usize, len: usize) -> Result<Vec<u32>, WgpuSlabError> {
+    pub async fn read_raw(
+        &self,
+        range: impl std::ops::RangeBounds<usize>,
+    ) -> Result<Vec<u32>, WgpuSlabError> {
+        let start = match range.start_bound() {
+            core::ops::Bound::Included(start) => *start,
+            core::ops::Bound::Excluded(start) => *start + 1,
+            core::ops::Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            core::ops::Bound::Included(end) => *end + 1,
+            core::ops::Bound::Excluded(end) => *end,
+            core::ops::Bound::Unbounded => self.len(),
+        };
+        let len = end - start;
         let byte_offset = start * std::mem::size_of::<u32>();
         let length = len * std::mem::size_of::<u32>();
         let output_buffer_size = length as u64;
@@ -292,7 +309,9 @@ impl WgpuBuffer {
 
     /// Read from the slab buffer.
     pub async fn read_async<T: SlabItem + Default>(&self, id: Id<T>) -> Result<T, WgpuSlabError> {
-        let vec = self.read_raw(id.index(), T::slab_size()).await?;
+        let start = id.index();
+        let end = start + T::slab_size();
+        let vec = self.read_raw(start..end).await?;
         let t = Slab::read(vec.as_slice(), Id::<T>::new(0));
         Ok(t)
     }
@@ -384,16 +403,14 @@ mod test {
         let c = glam::Vec3::new(2.0, 2.0, 2.0);
         let points = vec![a, b, c];
         let array = slab.append_array(&points);
-        let slab_u32 =
-            futures_lite::future::block_on(slab.as_ref().read_raw(0, slab.len())).unwrap();
+        let slab_u32 = slab.as_ref().block_on_read_raw(..).unwrap();
         let points_out = slab_u32.read_vec::<glam::Vec3>(array);
         assert_eq!(points, points_out);
 
         println!("append slice 2");
         let points = vec![a, a, a, a, b, b, b, c, c];
         let array = slab.append_array(&points);
-        let slab_u32 =
-            futures_lite::future::block_on(slab.as_ref().read_raw(0, slab.len())).unwrap();
+        let slab_u32 = slab.as_ref().block_on_read_raw(..).unwrap();
         let points_out = slab_u32.read_vec::<glam::Vec3>(array);
         assert_eq!(points, points_out);
     }
