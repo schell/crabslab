@@ -357,12 +357,12 @@ mod test {
 
         futures_lite::future::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
-                features:
+                required_features:
                 // this one is a funny requirement, it seems it is needed if
                 // using storage buffers in vertex shaders, even if those
                 // shaders are read-only
                 wgpu::Features::VERTEX_WRITABLE_STORAGE,
-                limits,
+                required_limits: limits,
                 label: None,
             },
             None, // Trace path

@@ -24,7 +24,7 @@ futures-lite = {version = "1.13", optional=true}
 log = {version = "0.4", optional=true}
 crabslab-derive = { version = "0.2.1", path = "../crabslab-derive" }
 snafu = {version = "0.7", optional=true}
-wgpu = {version = "0.18", optional=true}
+wgpu = {version = "0.19", optional=true}
 
 [target.'cfg(not(target_arch = "spirv"))'.dependencies]
 glam = { version = "0.24.2", features = ["std"], optional = true }
