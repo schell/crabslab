@@ -7,13 +7,8 @@ macro_rules! impl_underflow_primitive {
                 1
             }
 
-            fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-                if slab.len() > index {
-                    *self = slab[index] as $type;
-                    index + 1
-                } else {
-                    index
-                }
+            fn read_slab(index: usize, slab: &[u32]) -> Self {
+                slab[index] as $type
             }
 
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -35,15 +30,10 @@ macro_rules! impl_overflow_primitive {
                 $num_slots
             }
 
-            fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-                if slab.len() >= index + $num_slots {
-                    *self = (0..$num_slots).fold(0, |acc, i| {
-                        acc | ((<$type>::from(slab[index + i])) << (i * 32))
-                    });
-                    index + $num_slots
-                } else {
-                    index
-                }
+            fn read_slab(index: usize, slab: &[u32]) -> Self {
+                (0..$num_slots).fold(0, |acc, i| {
+                    acc | ((<$type>::from(slab[index + i])) << (i * 32))
+                })
             }
 
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -77,13 +67,8 @@ impl SlabItem for f32 {
         1
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        if slab.len() > index {
-            *self = f32::from_bits(slab[index]);
-            index + 1
-        } else {
-            index
-        }
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        f32::from_bits(slab[index])
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -101,11 +86,9 @@ impl SlabItem for f64 {
         2
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let mut temp_u64 = 0u64;
-        let index = temp_u64.read_slab(index, slab);
-        *self = f64::from_bits(temp_u64);
-        index
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        let temp_u64 = u64::read_slab(index, slab);
+        f64::from_bits(temp_u64)
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -119,11 +102,8 @@ impl SlabItem for bool {
         1
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let mut proxy = 0u32;
-        let index = proxy.read_slab(index, slab);
-        *self = proxy == 1;
-        index
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        u32::read_slab(index, slab) == 1
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {

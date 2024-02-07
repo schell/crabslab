@@ -11,22 +11,12 @@ enum FieldName {
 }
 
 struct FieldParams {
-    size: proc_macro2::TokenStream,
     field_tys: Vec<Type>,
     field_names: Vec<FieldName>,
 }
 
 impl FieldParams {
     fn new(fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>) -> Self {
-        let sizes: Vec<_> = fields
-            .iter()
-            .map(|field| {
-                let ty = &field.ty;
-                quote! {
-                    <#ty as crabslab::SlabItem>::slab_size()
-                }
-            })
-            .collect();
         let field_tys: Vec<_> = fields.iter().map(|field| field.ty.clone()).collect();
         let field_names: Vec<_> = fields
             .iter()
@@ -44,17 +34,7 @@ impl FieldParams {
                     })
             })
             .collect();
-        let mut field_sizes = sizes.clone();
-        field_sizes.push(quote! { 0 });
-        let size = if sizes.is_empty() {
-            quote! { 0 }
-        } else {
-            quote! {
-                #(#sizes)+*
-            }
-        };
         Self {
-            size,
             field_tys,
             field_names,
         }
@@ -113,22 +93,29 @@ fn get_enum_params(de: &DataEnum) -> EnumParams {
             }
         })
         .collect::<Vec<_>>();
-    let slab_size = variants.iter().fold(quote! { 0 }, |acc, variant| {
-        let size = &variant.fields.size;
-        quote! {
-            max(#acc, #size)
-        }
-    });
+    let slab_size_def = quote! {
+        let mut __size = 0usize;
+    };
+    let slab_size_increments = variants
+        .iter()
+        .map(|variant| {
+            let tys = &variant.fields.field_tys;
+            if tys.is_empty() {
+                quote! {}
+            } else {
+                quote! {{
+                    let __field_size = #( <#tys as crabslab::SlabItem>::slab_size() )+*;
+                    __size += crabslab::__saturating_sub(__field_size,__size);
+                }}
+            }
+        })
+        .collect::<Vec<_>>();
     EnumParams {
         slab_size: quote! {
-            fn max(a: usize, b: usize) -> usize {
-                if a > b {
-                    a
-                } else {
-                    b
-                }
-            }
-            1 + #slab_size
+            #slab_size_def
+            #(#slab_size_increments)*
+            // Add one for the enum variant
+            __size + 1
         },
         variants,
     }
@@ -237,7 +224,6 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
         .collect::<Vec<_>>();
     let mut generics = input.generics;
     {
-        /// Adds a `CanFetch<'lt>` bound on each of the system data types.
         fn constrain_system_data_types(clause: &mut WhereClause, tys: &[Type]) {
             for ty in tys.iter() {
                 let where_predicate: WherePredicate = syn::parse_quote!(#ty : crabslab::SlabItem);
@@ -262,34 +248,48 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
             })
             .collect::<Vec<_>>();
         let field_tys = &variant.fields.field_tys;
-        let definitions = quote! {
-            #(let mut #field_names: #field_tys = Default::default();)*
-        };
-        let reads = quote! {
-            #(let index = #field_names.read_slab(index, slab);)*
-        };
+        let num_fields = field_names.len();
+        let reads = field_names
+            .iter()
+            .zip(field_tys.iter())
+            .enumerate()
+            .map(|(i, (name, ty))| {
+                let def = quote! {
+                    let #name = <#ty as crabslab::SlabItem>::read_slab(index, slab);
+                };
+                let increment_index = if i + 1 < num_fields {
+                    quote! {
+                        index += <#ty as crabslab::SlabItem>::slab_size();
+                    }
+                } else {
+                    quote! {}
+                };
+                quote! {
+                    #def
+                    #increment_index
+                }
+            })
+            .collect::<Vec<_>>();
 
         match variant.variant.fields {
             Fields::Named(_) => {
-                quote! {
-                    #definitions
-                    #reads
-                    *self = #name::#ident {
-                        #(#field_names,)*
-                    };
-                }
+                quote! {{
+                    #(#reads)*
+                     #name::#ident {
+                         #(#field_names),*
+                     }
+                }}
             }
             Fields::Unnamed(_) => {
-                quote! {
-                    #definitions
-                    #reads
-                    *self = #name::#ident(
-                        #(#field_names,)*
-                    );
-                }
+                quote! {{
+                    #(#reads)*
+                    #name::#ident(
+                        #(#field_names),*
+                    )
+                }}
             }
             Fields::Unit => quote! {
-                *self = #name::#ident;
+                #name::#ident,
             },
         }
     });
@@ -300,10 +300,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
         .map(|((i, variant), read)| {
             let hash = syn::LitInt::new(&i.to_string(), variant.variant.span());
             quote! {
-                #hash => {
-                    #read
-                    original_index + slab_size
-                }
+                #hash => #read
             }
         })
         .collect();
@@ -375,28 +372,18 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
                 #slab_size
             }
 
-            fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-                let slab_size = Self::slab_size();
-                if slab.len() < index + slab_size {
-                    return index;
-                }
-
-                let original_index = index;
+            fn read_slab(mut index: usize, slab: &[u32]) -> Self {
                 // Read the hash to tell which variant we're in.
-                let mut hash = 0u32;
-                let index = hash.read_slab(index, slab);
+                let hash =  u32::read_slab(index, slab);
+                index += 1;
                 match hash {
                     #(#read_variants_matches)*
-                    _ => original_index,
+                    _ => Default::default(),
                 }
             }
 
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
                 let slab_size = Self::slab_size();
-                if slab.len() < index + slab_size {
-                    return index;
-                }
-
                 let original_index = index;
                 match self {
                     #(#write_variants_matches)*
@@ -409,12 +396,15 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
 
 fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macro::TokenStream {
     let FieldParams {
-        size,
         field_tys,
         field_names,
     } = params;
 
     let name = &input.ident;
+    let is_struct_style = match field_names.first() {
+        Some(FieldName::Index(_)) => false,
+        _ => true,
+    };
     let mut generics = input.generics;
     {
         /// Adds a `CanFetch<'lt>` bound on each of the system data types.
@@ -429,17 +419,36 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
         constrain_system_data_types(where_clause, &field_tys)
     }
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    let read_index_field_names = field_names
+    let read_field_names = field_names
         .iter()
-        .map(|name| match name {
-            FieldName::Index(i) => quote! {
-                let index = self.#i.read_slab(index, slab);
-            },
-            FieldName::Ident(field) => quote! {
-                let index = self.#field.read_slab(index, slab);
-            },
+        .zip(field_tys.iter())
+        .enumerate()
+        .map(|(i, (name, ty))| {
+            let var = Ident::new(&format!("__{i}"), ty.span());
+            let inner = quote! {{
+                let #var = <#ty as crabslab::SlabItem>::read_slab(index, slab);
+                index += <#ty as crabslab::SlabItem>::slab_size();
+                #var
+            }};
+            match name {
+                FieldName::Index(_) => inner,
+                FieldName::Ident(n) => {
+                    quote! {
+                        #n: #inner
+                    }
+                }
+            }
         })
         .collect::<Vec<_>>();
+    let read_impl = if is_struct_style {
+        quote! {
+            Self { #(#read_field_names),* }
+        }
+    } else {
+        quote! {
+            Self( #(#read_field_names),* )
+        }
+    };
     let write_index_field_names = field_names
         .iter()
         .map(|name| match name {
@@ -481,17 +490,11 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
         impl #impl_generics crabslab::SlabItem for #name #ty_generics #where_clause
         {
             fn slab_size() -> usize {
-                #size
+                #( <#field_tys as crabslab::SlabItem>::slab_size() )+*
             }
 
-            fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-                if slab.len() < index + Self::slab_size() {
-                    return index;
-                }
-
-                #(#read_index_field_names)*
-
-                index
+            fn read_slab(mut index: usize, slab: &[u32]) -> Self {
+                #read_impl
             }
 
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -517,6 +520,18 @@ pub fn impl_slabitem_tuples(input: proc_macro::TokenStream) -> proc_macro::Token
         .enumerate()
         .map(|(i, _)| Index::from(i))
         .collect::<Vec<_>>();
+    let reads = tys
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| {
+            let var = Ident::new(&format!("__{i}"), ty.span());
+            quote! {{
+                    let #var = <#ty as crabslab::SlabItem>::read_slab(index, slab);
+                    index += <#ty as crabslab::SlabItem>::slab_size();
+                    #var
+            }}
+        })
+        .collect::<Vec<_>>();
     let output = quote! {
         impl<#(#tys),*> crabslab::SlabItem for #tuple
         where
@@ -525,9 +540,10 @@ pub fn impl_slabitem_tuples(input: proc_macro::TokenStream) -> proc_macro::Token
             fn slab_size() -> usize {
                 #(#tys::slab_size() +)* 0
             }
-            fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-                #(let index = self.#indices.read_slab(index, slab);)*
-                index
+            fn read_slab(mut index: usize, slab: &[u32]) -> Self {
+                (
+                    #( #reads ,)*
+                )
             }
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
                 #(let index = self.#indices.write_slab(index, slab);)*

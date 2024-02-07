@@ -1,6 +1,9 @@
+shaders/target
 /target
 Cargo.lock
 *~undo-tree~
+*.spv
+/shaders.rs
 flamegraph.svg
 .#*
 .DS_Store

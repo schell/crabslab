@@ -18,7 +18,7 @@ pub trait SlabItem: core::any::Any + Sized {
     ///
     /// If the type cannot be read, the returned index will be equal
     /// to `index`.
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize;
+    fn read_slab(index: usize, slab: &[u32]) -> Self;
 
     /// Write the type into the slab at starting `index` and return
     /// the new index.
@@ -89,10 +89,8 @@ impl Slab for [u32] {
         self.len()
     }
 
-    fn read<T: SlabItem + Default>(&self, id: Id<T>) -> T {
-        let mut t = T::default();
-        let _ = t.read_slab(id.index(), self);
-        t
+    fn read<T: SlabItem>(&self, id: Id<T>) -> T {
+        T::read_slab(id.0 as usize, self)
     }
 
     fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
@@ -412,5 +410,45 @@ mod test {
 
         assert_eq!(buffer1, slab.read(id1));
         assert_eq!(buffer2, slab.read(id2));
+    }
+}
+
+#[cfg(test)]
+mod blah {
+    use crate as crabslab;
+    use crate::*;
+
+    #[test]
+    fn derive_baz_sanity() {
+        #[derive(Debug, Default, PartialEq, SlabItem)]
+        pub struct Bar {
+            a: u32,
+        }
+
+        #[derive(Debug, Default, PartialEq, SlabItem)]
+        enum Baz {
+            #[default]
+            One,
+            Two {
+                a: u32,
+                b: u32,
+            },
+            Three(u32, u32),
+            Four(Bar),
+        }
+
+        assert_eq!(3, Baz::slab_size());
+
+        let mut slab = CpuSlab::new(vec![]);
+
+        let one_id = slab.append(&Baz::One);
+        let two_id = slab.append(&Baz::Two { a: 1, b: 2 });
+        let three_id = slab.append(&Baz::Three(3, 4));
+        let four_id = slab.append(&Baz::Four(Bar { a: 5 }));
+
+        assert_eq!(Baz::One, slab.read(one_id));
+        assert_eq!(Baz::Two { a: 1, b: 2 }, slab.read(two_id));
+        assert_eq!(Baz::Three(3, 4), slab.read(three_id));
+        assert_eq!(Baz::Four(Bar { a: 5 }), slab.read(four_id));
     }
 }

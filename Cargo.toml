@@ -1,7 +1,14 @@
 [workspace]
 members = [
     "crates/crabslab",
-    "crates/crabslab-derive"
+    "crates/crabslab-derive",
+    "crates/example",
 ]
 
+# 'shaders' contains a test spirv shader to measure filesize when using crabslab
+exclude = ["./shaders"]
+
 resolver = "2"
+
+[workspace.dependencies]
+glam = { version = "0.24.2", default-features = false }

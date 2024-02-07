@@ -98,16 +98,6 @@ impl<T: SlabItem> SlabItem for Array<T> {
         2
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        if index + Self::slab_size() > slab.len() {
-            index
-        } else {
-            let index = self.index.read_slab(index, slab);
-            let index = self.len.read_slab(index, slab);
-            index
-        }
-    }
-
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
         if index + Self::slab_size() > slab.len() {
             index
@@ -116,6 +106,12 @@ impl<T: SlabItem> SlabItem for Array<T> {
             let index = self.len.write_slab(index, slab);
             index
         }
+    }
+
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        let start = u32::read_slab(index, slab);
+        let len = u32::read_slab(index + 1, slab);
+        Array::new(start, len)
     }
 }
 

@@ -252,15 +252,15 @@ impl<F, T> Offset<F, T> {
 mod test {
     use super::*;
 
-    #[derive(SlabItem)]
-    struct MyEntity {
-        name: u32,
-        age: f32,
-        destiny: [u32; 3],
-    }
-
     #[test]
     fn id_size() {
+        #[derive(SlabItem)]
+        struct MyEntity {
+            name: u32,
+            age: f32,
+            destiny: [u32; 3],
+        }
+
         assert_eq!(
             std::mem::size_of::<u32>(),
             std::mem::size_of::<Id<MyEntity>>(),

@@ -1,17 +1,14 @@
+use glam::{Mat4, Quat, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
+
 use crate::SlabItem;
 
 impl SlabItem for glam::Mat4 {
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let Self {
-            x_axis,
-            y_axis,
-            z_axis,
-            w_axis,
-        } = self;
-        let index = x_axis.read_slab(index, slab);
-        let index = y_axis.read_slab(index, slab);
-        let index = z_axis.read_slab(index, slab);
-        w_axis.read_slab(index, slab)
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        let x_axis = Vec4::read_slab(index, slab);
+        let y_axis = Vec4::read_slab(index + 4, slab);
+        let z_axis = Vec4::read_slab(index + 8, slab);
+        let w_axis = Vec4::read_slab(index + 12, slab);
+        Mat4::from_cols(x_axis, y_axis, z_axis, w_axis)
     }
 
     fn slab_size() -> usize {
@@ -37,10 +34,10 @@ impl SlabItem for glam::Vec2 {
         2
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        index
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        let x = f32::read_slab(index, slab);
+        let y = f32::read_slab(index + 1, slab);
+        Vec2::new(x, y)
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -58,12 +55,11 @@ impl SlabItem for glam::Vec3 {
         3
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let Self { x, y, z } = self;
-        let index = x.read_slab(index, slab);
-        let index = y.read_slab(index, slab);
-        let index = z.read_slab(index, slab);
-        index
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        let x = f32::read_slab(index, slab);
+        let y = f32::read_slab(index + 1, slab);
+        let z = f32::read_slab(index + 2, slab);
+        Vec3::new(x, y, z)
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -80,11 +76,13 @@ impl SlabItem for glam::Vec4 {
         4
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        let index = self.z.read_slab(index, slab);
-        self.w.read_slab(index, slab)
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        Vec4::new(
+            f32::read_slab(index, slab),
+            f32::read_slab(index + 1, slab),
+            f32::read_slab(index + 2, slab),
+            f32::read_slab(index + 3, slab),
+        )
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -100,11 +98,13 @@ impl SlabItem for glam::Quat {
         16
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        let index = self.z.read_slab(index, slab);
-        self.w.read_slab(index, slab)
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        Quat::from_xyzw(
+            f32::read_slab(index, slab),
+            f32::read_slab(index + 1, slab),
+            f32::read_slab(index + 2, slab),
+            f32::read_slab(index + 3, slab),
+        )
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -120,10 +120,8 @@ impl SlabItem for glam::UVec2 {
         2
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        index
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        UVec2::new(u32::read_slab(index, slab), u32::read_slab(index + 1, slab))
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -138,11 +136,12 @@ impl SlabItem for glam::UVec3 {
         3
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        let index = self.z.read_slab(index, slab);
-        index
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        UVec3::new(
+            u32::read_slab(index, slab),
+            u32::read_slab(index + 1, slab),
+            u32::read_slab(index + 2, slab),
+        )
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
@@ -158,12 +157,13 @@ impl SlabItem for glam::UVec4 {
         4
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let index = self.x.read_slab(index, slab);
-        let index = self.y.read_slab(index, slab);
-        let index = self.z.read_slab(index, slab);
-        let index = self.w.read_slab(index, slab);
-        index
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        UVec4::new(
+            u32::read_slab(index, slab),
+            u32::read_slab(index + 1, slab),
+            u32::read_slab(index + 2, slab),
+            u32::read_slab(index + 3, slab),
+        )
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {

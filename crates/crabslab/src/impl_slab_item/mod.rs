@@ -11,17 +11,13 @@ impl<T: SlabItem + Default> SlabItem for Option<T> {
         1 + T::slab_size()
     }
 
-    fn read_slab(&mut self, index: usize, slab: &[u32]) -> usize {
-        let mut proxy = 0u32;
-        let index = proxy.read_slab(index, slab);
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        let proxy = u32::read_slab(index, slab);
         if proxy == 1 {
-            let mut t = T::default();
-            let index = t.read_slab(index, slab);
-            *self = Some(t);
-            index
+            let t = T::read_slab(index + 1, slab);
+            Some(t)
         } else {
-            *self = None;
-            index + T::slab_size()
+            None
         }
     }
 
@@ -36,16 +32,18 @@ impl<T: SlabItem + Default> SlabItem for Option<T> {
     }
 }
 
-impl<T: SlabItem, const N: usize> SlabItem for [T; N] {
+impl<T: SlabItem + Copy + Default, const N: usize> SlabItem for [T; N] {
     fn slab_size() -> usize {
         <T as SlabItem>::slab_size() * N
     }
 
-    fn read_slab(&mut self, mut index: usize, slab: &[u32]) -> usize {
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        let mut array = [T::default(); N];
         for i in 0..N {
-            index = self[i].read_slab(index, slab);
+            let j = index + i * T::slab_size();
+            array[i] = T::read_slab(j, slab);
         }
-        index
+        array
     }
 
     fn write_slab(&self, mut index: usize, slab: &mut [u32]) -> usize {
@@ -63,8 +61,8 @@ impl<T: core::any::Any> SlabItem for PhantomData<T> {
         0
     }
 
-    fn read_slab(&mut self, index: usize, _: &[u32]) -> usize {
-        index
+    fn read_slab(_: usize, _: &[u32]) -> Self {
+        PhantomData
     }
 
     fn write_slab(&self, index: usize, _: &mut [u32]) -> usize {
