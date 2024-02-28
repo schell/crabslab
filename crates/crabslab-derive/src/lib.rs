@@ -187,7 +187,7 @@ fn get_params(input: &DeriveInput) -> syn::Result<Params> {
 ///     Four(Bar),
 /// }
 ///
-/// assert_eq!(3, Baz::slab_size());
+/// assert_eq!(3, Baz::SLAB_SIZE);
 ///
 /// let mut slab = CpuSlab::new(vec![]);
 ///
