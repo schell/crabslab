@@ -99,16 +99,15 @@ impl Slab for WgpuBuffer {
 
     fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
         let byte_offset = index * std::mem::size_of::<u32>();
-        let size = T::slab_size();
-        let mut bytes = vec![0u32; size];
+        let mut bytes = vec![0u32; T::SLAB_SIZE];
         let _ = bytes.write_indexed(t, 0);
         let capacity = self.capacity();
-        if index + size > capacity {
+        if index + T::SLAB_SIZE > capacity {
             log::error!(
                 "could not write to slab: {}",
                 CapacitySnafu {
                     type_is: std::any::type_name::<T>(),
-                    slab_size: T::slab_size(),
+                    slab_size: T::SLAB_SIZE,
                     index,
                     capacity
                 }
@@ -126,12 +125,12 @@ impl Slab for WgpuBuffer {
         );
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        index + size
+        index + T::SLAB_SIZE
     }
 
     fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
         let capacity = self.capacity();
-        let size = T::slab_size() * t.len();
+        let size = T::SLAB_SIZE * t.len();
         if index + size > capacity {
             log::error!(
                 "could not write array to slab: {}",
@@ -139,7 +138,7 @@ impl Slab for WgpuBuffer {
                     capacity,
                     type_is: std::any::type_name::<T>(),
                     elements: t.len(),
-                    slab_size: T::slab_size(),
+                    slab_size: T::SLAB_SIZE,
                     index
                 }
                 .into_error(snafu::NoneError)
@@ -310,7 +309,7 @@ impl WgpuBuffer {
     /// Read from the slab buffer.
     pub async fn read_async<T: SlabItem + Default>(&self, id: Id<T>) -> Result<T, WgpuSlabError> {
         let start = id.index();
-        let end = start + T::slab_size();
+        let end = start + T::SLAB_SIZE;
         let vec = self.read_raw(start..end).await?;
         let t = Slab::read(vec.as_slice(), Id::<T>::new(0));
         Ok(t)

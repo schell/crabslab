@@ -94,18 +94,12 @@ impl<T> PartialEq for Array<T> {
 }
 
 impl<T: SlabItem> SlabItem for Array<T> {
-    fn slab_size() -> usize {
-        2
-    }
+    const SLAB_SIZE: usize = 2;
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        if index + Self::slab_size() > slab.len() {
-            index
-        } else {
-            let index = self.index.write_slab(index, slab);
-            let index = self.len.write_slab(index, slab);
-            index
-        }
+        let index = self.index.write_slab(index, slab);
+        let index = self.len.write_slab(index, slab);
+        index
     }
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
@@ -157,7 +151,7 @@ impl<T> Array<T> {
         if index >= self.len() {
             Id::NONE
         } else {
-            Id::new(self.index + (T::slab_size() * index) as u32)
+            Id::new(self.index + (T::SLAB_SIZE * index) as u32)
         }
     }
 
@@ -179,7 +173,7 @@ impl<T> Array<T> {
     {
         Array {
             index: self.index,
-            len: self.len * T::slab_size() as u32,
+            len: self.len * T::SLAB_SIZE as u32,
             _phantom: PhantomData,
         }
     }

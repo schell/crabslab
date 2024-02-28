@@ -11,7 +11,7 @@ use crate::{array::Array, id::Id};
 /// so long as those types' fields implement `SlabItem`.
 pub trait SlabItem: core::any::Any + Sized {
     /// The number of `u32`s this type occupies in a slab of `&[u32]`.
-    fn slab_size() -> usize;
+    const SLAB_SIZE: usize;
 
     /// Read the type out of the slab at starting `index` and return
     /// the new index.
@@ -35,7 +35,7 @@ pub trait Slab {
 
     /// Returns whether the slab may contain the value with the given id.
     fn contains<T: SlabItem>(&self, id: Id<T>) -> bool {
-        id.index() + T::slab_size() <= self.len()
+        id.index() + T::SLAB_SIZE <= self.len()
     }
 
     /// Read the type from the slab using the Id as the index.
@@ -140,13 +140,12 @@ pub trait GrowableSlab: Slab {
 
     /// Expands the slab to fit the given number of `T`s, if necessary.
     fn maybe_expand_to_fit<T: SlabItem>(&mut self, len: usize) {
-        let size = T::slab_size();
         let capacity = self.capacity();
         // log::trace!(
         //    "append_slice: {size} * {ts_len} + {len} ({}) >= {capacity}",
         //    size * ts_len + len
         //);
-        let capacity_needed = self.len() + size * len;
+        let capacity_needed = self.len() + T::SLAB_SIZE * len;
         if capacity_needed > capacity {
             let mut new_capacity = capacity * 2;
             while new_capacity < capacity_needed {
@@ -165,7 +164,7 @@ pub trait GrowableSlab: Slab {
     /// buffer capacity.
     fn allocate<T: SlabItem>(&mut self) -> Id<T> {
         self.maybe_expand_to_fit::<T>(1);
-        let index = self.increment_len(T::slab_size());
+        let index = self.increment_len(T::SLAB_SIZE);
         Id::from(index)
     }
 
@@ -181,7 +180,7 @@ pub trait GrowableSlab: Slab {
             return Array::default();
         }
         self.maybe_expand_to_fit::<T>(len);
-        let index = self.increment_len(T::slab_size() * len);
+        let index = self.increment_len(T::SLAB_SIZE * len);
         Array::new(index as u32, len as u32)
     }
 
@@ -360,16 +359,16 @@ mod test {
                 ..Default::default()
             },
         ];
-        let geometry_slab_size = Vertex::slab_size() * geometry.len();
-        let mut slab = vec![0u32; geometry_slab_size + Array::<Vertex>::slab_size()];
+        let geometry_slab_size = Vertex::SLAB_SIZE * geometry.len();
+        let mut slab = vec![0u32; geometry_slab_size + Array::<Vertex>::SLAB_SIZE];
         let index = 0usize;
         let vertices = Array::<Vertex>::new(index as u32, geometry.len() as u32);
         let index = slab.write_indexed_slice(&geometry, index);
         assert_eq!(geometry_slab_size, index);
         let vertices_id = Id::<Array<Vertex>>::from(index);
         let index = slab.write_indexed(&vertices, index);
-        assert_eq!(geometry_slab_size + Array::<Vertex>::slab_size(), index);
-        assert_eq!(Vertex::slab_size() * 6, vertices_id.index());
+        assert_eq!(geometry_slab_size + Array::<Vertex>::SLAB_SIZE, index);
+        assert_eq!(Vertex::SLAB_SIZE * 6, vertices_id.index());
         assert!(slab.contains(vertices_id),);
 
         let array = slab.read(vertices_id);
@@ -437,7 +436,7 @@ mod blah {
             Four(Bar),
         }
 
-        assert_eq!(3, Baz::slab_size());
+        assert_eq!(3, Baz::SLAB_SIZE);
 
         let mut slab = CpuSlab::new(vec![]);
 

@@ -1,15 +1,27 @@
 //! Typed identifiers that can also be used as indices.
 use core::marker::PhantomData;
 
-use crate::{self as crabslab, slab::SlabItem};
+use crate::slab::SlabItem;
 
 /// `u32` value of an [`Id`] that does not point to any item.
 pub const ID_NONE: u32 = u32::MAX;
 
 /// An identifier that can be used to read or write a type from/into the slab.
 #[repr(transparent)]
-#[derive(SlabItem)]
 pub struct Id<T>(pub(crate) u32, PhantomData<T>);
+
+impl<T: core::any::Any> SlabItem for Id<T> {
+    const SLAB_SIZE: usize = { 1 };
+
+    fn read_slab(index: usize, slab: &[u32]) -> Self {
+        Id::new(slab[index as usize])
+    }
+
+    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
+        slab[index as usize] = self.0;
+        1
+    }
+}
 
 impl<T> PartialOrd for Id<T> {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
@@ -251,6 +263,8 @@ impl<F, T> Offset<F, T> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate as crabslab;
+    use crabslab::SlabItem;
 
     #[test]
     fn id_size() {

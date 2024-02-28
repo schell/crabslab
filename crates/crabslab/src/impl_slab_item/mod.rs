@@ -7,9 +7,7 @@ mod glam;
 use crate::SlabItem;
 
 impl<T: SlabItem + Default> SlabItem for Option<T> {
-    fn slab_size() -> usize {
-        1 + T::slab_size()
-    }
+    const SLAB_SIZE: usize = { 1 + T::SLAB_SIZE };
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
         let proxy = u32::read_slab(index, slab);
@@ -27,20 +25,18 @@ impl<T: SlabItem + Default> SlabItem for Option<T> {
             t.write_slab(index, slab)
         } else {
             let index = 0u32.write_slab(index, slab);
-            index + T::slab_size()
+            index + T::SLAB_SIZE
         }
     }
 }
 
 impl<T: SlabItem + Copy + Default, const N: usize> SlabItem for [T; N] {
-    fn slab_size() -> usize {
-        <T as SlabItem>::slab_size() * N
-    }
+    const SLAB_SIZE: usize = { <T as SlabItem>::SLAB_SIZE * N };
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
         let mut array = [T::default(); N];
         for i in 0..N {
-            let j = index + i * T::slab_size();
+            let j = index + i * T::SLAB_SIZE;
             array[i] = T::read_slab(j, slab);
         }
         array
@@ -57,9 +53,7 @@ impl<T: SlabItem + Copy + Default, const N: usize> SlabItem for [T; N] {
 use core::marker::PhantomData;
 
 impl<T: core::any::Any> SlabItem for PhantomData<T> {
-    fn slab_size() -> usize {
-        0
-    }
+    const SLAB_SIZE: usize = { 0 };
 
     fn read_slab(_: usize, _: &[u32]) -> Self {
         PhantomData

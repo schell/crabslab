@@ -104,7 +104,7 @@ fn get_enum_params(de: &DataEnum) -> EnumParams {
                 quote! {}
             } else {
                 quote! {{
-                    let __field_size = #( <#tys as crabslab::SlabItem>::slab_size() )+*;
+                    let __field_size = #( <#tys as crabslab::SlabItem>::SLAB_SIZE )+*;
                     __size += crabslab::__saturating_sub(__field_size,__size);
                 }}
             }
@@ -259,7 +259,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
                 };
                 let increment_index = if i + 1 < num_fields {
                     quote! {
-                        index += <#ty as crabslab::SlabItem>::slab_size();
+                        index += <#ty as crabslab::SlabItem>::SLAB_SIZE;
                     }
                 } else {
                     quote! {}
@@ -368,9 +368,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
         #[automatically_derived]
         impl #impl_generics crabslab::SlabItem for #name #ty_generics #where_clause
         {
-            fn slab_size() -> usize {
-                #slab_size
-            }
+            const SLAB_SIZE: usize = {#slab_size};
 
             fn read_slab(mut index: usize, slab: &[u32]) -> Self {
                 // Read the hash to tell which variant we're in.
@@ -383,7 +381,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
             }
 
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-                let slab_size = Self::slab_size();
+                let slab_size = Self::SLAB_SIZE;
                 let original_index = index;
                 match self {
                     #(#write_variants_matches)*
@@ -427,7 +425,7 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
             let var = Ident::new(&format!("__{i}"), ty.span());
             let inner = quote! {{
                 let #var = <#ty as crabslab::SlabItem>::read_slab(index, slab);
-                index += <#ty as crabslab::SlabItem>::slab_size();
+                index += <#ty as crabslab::SlabItem>::SLAB_SIZE;
                 #var
             }};
             match name {
@@ -471,7 +469,7 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
         offsets.push(quote! {
             pub fn #ident() -> crabslab::Offset<#ty, Self> {
                 crabslab::Offset::new(
-                    #(<#offset_tys as crabslab::SlabItem>::slab_size()+)*
+                    #(<#offset_tys as crabslab::SlabItem>::SLAB_SIZE+)*
                     0
                 )
             }
@@ -489,16 +487,16 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
         #[automatically_derived]
         impl #impl_generics crabslab::SlabItem for #name #ty_generics #where_clause
         {
-            fn slab_size() -> usize {
-                #( <#field_tys as crabslab::SlabItem>::slab_size() )+*
-            }
+            const SLAB_SIZE: usize = {
+                #( <#field_tys as crabslab::SlabItem>::SLAB_SIZE )+*
+            };
 
             fn read_slab(mut index: usize, slab: &[u32]) -> Self {
                 #read_impl
             }
 
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-                if slab.len() < index + Self::slab_size() {
+                if slab.len() < index + Self::SLAB_SIZE {
                     return index;
                 }
 
@@ -527,7 +525,7 @@ pub fn impl_slabitem_tuples(input: proc_macro::TokenStream) -> proc_macro::Token
             let var = Ident::new(&format!("__{i}"), ty.span());
             quote! {{
                     let #var = <#ty as crabslab::SlabItem>::read_slab(index, slab);
-                    index += <#ty as crabslab::SlabItem>::slab_size();
+                    index += <#ty as crabslab::SlabItem>::SLAB_SIZE;
                     #var
             }}
         })
@@ -537,9 +535,9 @@ pub fn impl_slabitem_tuples(input: proc_macro::TokenStream) -> proc_macro::Token
         where
             #(#tys: crabslab::SlabItem),*,
         {
-            fn slab_size() -> usize {
-                #(#tys::slab_size() +)* 0
-            }
+            const SLAB_SIZE: usize = {
+                #(#tys::SLAB_SIZE )+*
+            };
             fn read_slab(mut index: usize, slab: &[u32]) -> Self {
                 (
                     #( #reads ,)*

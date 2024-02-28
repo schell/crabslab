@@ -24,12 +24,12 @@ pub use crabslab_derive::SlabItem;
 /// Proxy for `u32::saturating_sub`.
 ///
 /// Used by the derive macro for `SlabItem`.
-pub fn __saturating_sub(a: usize, b: usize) -> usize {
+pub const fn __saturating_sub(a: usize, b: usize) -> usize {
     a.saturating_sub(b)
 }
 
 #[cfg(target_arch = "spirv")]
-pub fn __saturating_sub(a: usize, b: usize) -> usize {
+pub const fn __saturating_sub(a: usize, b: usize) -> usize {
     if a < b {
         0
     } else {

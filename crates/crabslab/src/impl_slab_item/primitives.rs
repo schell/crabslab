@@ -3,9 +3,7 @@ use crate::SlabItem;
 macro_rules! impl_underflow_primitive {
     ($type: ty) => {
         impl SlabItem for $type {
-            fn slab_size() -> usize {
-                1
-            }
+            const SLAB_SIZE: usize = { 1 };
 
             fn read_slab(index: usize, slab: &[u32]) -> Self {
                 slab[index] as $type
@@ -26,9 +24,7 @@ macro_rules! impl_underflow_primitive {
 macro_rules! impl_overflow_primitive {
     ($type: ty, $num_slots: expr) => {
         impl SlabItem for $type {
-            fn slab_size() -> usize {
-                $num_slots
-            }
+            const SLAB_SIZE: usize = { $num_slots };
 
             fn read_slab(index: usize, slab: &[u32]) -> Self {
                 (0..$num_slots).fold(0, |acc, i| {
@@ -63,9 +59,7 @@ impl_overflow_primitive!(u128, 4);
 impl_overflow_primitive!(i128, 4);
 
 impl SlabItem for f32 {
-    fn slab_size() -> usize {
-        1
-    }
+    const SLAB_SIZE: usize = { 1 };
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
         f32::from_bits(slab[index])
@@ -82,9 +76,7 @@ impl SlabItem for f32 {
 }
 
 impl SlabItem for f64 {
-    fn slab_size() -> usize {
-        2
-    }
+    const SLAB_SIZE: usize = { 2 };
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
         let temp_u64 = u64::read_slab(index, slab);
@@ -98,9 +90,7 @@ impl SlabItem for f64 {
 }
 
 impl SlabItem for bool {
-    fn slab_size() -> usize {
-        1
-    }
+    const SLAB_SIZE: usize = { 1 };
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
         u32::read_slab(index, slab) == 1
