@@ -19,7 +19,7 @@ impl<T: core::any::Any> SlabItem for Id<T> {
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
         slab[index as usize] = self.0;
-        1
+        index + 1
     }
 }
 
@@ -280,5 +280,16 @@ mod test {
             std::mem::size_of::<Id<MyEntity>>(),
             "id is not u32"
         );
+    }
+
+    #[test]
+    fn write_id() {
+        let mut slab = [0u32; 4];
+        let id = Id::<u32>::new(666);
+        let index = 0;
+        let index = id.write_slab(index, &mut slab);
+        assert_eq!(1, index);
+        let index = id.write_slab(index, &mut slab);
+        assert_eq!(2, index);
     }
 }
