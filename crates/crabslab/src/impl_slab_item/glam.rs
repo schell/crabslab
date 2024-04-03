@@ -86,7 +86,7 @@ impl SlabItem for glam::Vec4 {
 }
 
 impl SlabItem for glam::Quat {
-    const SLAB_SIZE: usize = { 16 };
+    const SLAB_SIZE: usize = { 4 };
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
         Quat::from_xyzw(

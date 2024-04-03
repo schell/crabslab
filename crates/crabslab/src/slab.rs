@@ -13,11 +13,7 @@ pub trait SlabItem: core::any::Any + Sized {
     /// The number of `u32`s this type occupies in a slab of `&[u32]`.
     const SLAB_SIZE: usize;
 
-    /// Read the type out of the slab at starting `index` and return
-    /// the new index.
-    ///
-    /// If the type cannot be read, the returned index will be equal
-    /// to `index`.
+    /// Read the type out of the slab at `index`.
     fn read_slab(index: usize, slab: &[u32]) -> Self;
 
     /// Write the type into the slab at starting `index` and return
@@ -90,6 +86,11 @@ impl Slab for [u32] {
     }
 
     fn read<T: SlabItem>(&self, id: Id<T>) -> T {
+        debug_assert!(
+            id.0 as usize + T::SLAB_SIZE <= self.len(),
+            "reading {id:?} would read past the length of the slab ({})",
+            self.len()
+        );
         T::read_slab(id.0 as usize, self)
     }
 
