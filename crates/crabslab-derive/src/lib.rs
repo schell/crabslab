@@ -139,9 +139,8 @@ fn get_params(input: &DeriveInput) -> syn::Result<Params> {
 
 /// Derives `SlabItem` for a struct.
 ///
-/// For structs this will also implement `offset_of_{field}` functions for each
-/// field, which returns the offset of that field relative to the start of the
-/// struct:
+/// For structs this will also implement `offset_of_{field}` and `slab_size_of_{field}` functions for each
+/// field, which returns the offset of that field relative to the start of the struct or the size of the field (each in u32):
 ///
 /// ```rust
 /// use crabslab::{CpuSlab, GrowableSlab, Slab, SlabItem};
@@ -462,16 +461,26 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
     let mut offset_tys = vec![];
     let mut offsets = vec![];
     for (name, ty) in field_names.iter().zip(field_tys.iter()) {
-        let ident = match name {
-            FieldName::Index(i) => Ident::new(&format!("offset_of_{}", i.index), i.span),
-            FieldName::Ident(field) => Ident::new(&format!("offset_of_{}", field), field.span()),
+        let (offset_of_ident, slab_size_of_ident) = match name {
+            FieldName::Index(i) => (
+                Ident::new(&format!("offset_of_{}", i.index), i.span),
+                Ident::new(&format!("slab_size_of_{}", i.index), i.span),
+            ),
+            FieldName::Ident(field) => (
+                Ident::new(&format!("offset_of_{}", field), field.span()),
+                Ident::new(&format!("slab_size_of_{}", field), field.span()),
+            ),
         };
         offsets.push(quote! {
-            pub fn #ident() -> crabslab::Offset<#ty, Self> {
+            pub fn #offset_of_ident() -> crabslab::Offset<#ty, Self> {
                 crabslab::Offset::new(
                     #(<#offset_tys as crabslab::SlabItem>::SLAB_SIZE+)*
                     0
                 )
+            }
+
+            pub fn #slab_size_of_ident() -> usize {
+                <#ty as crabslab::SlabItem>::SLAB_SIZE
             }
         });
         offset_tys.push(ty.clone());

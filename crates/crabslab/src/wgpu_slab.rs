@@ -97,6 +97,10 @@ impl Slab for WgpuBuffer {
         futures_lite::future::block_on(self.read_async(id)).unwrap()
     }
 
+    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
+        futures_lite::future::block_on(self.read_unchecked_async(id)).unwrap()
+    }
+
     fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
         let byte_offset = index * std::mem::size_of::<u32>();
         let mut bytes = vec![0u32; T::SLAB_SIZE];
@@ -307,6 +311,15 @@ impl WgpuBuffer {
     }
 
     /// Read from the slab buffer.
+    pub async fn read_unchecked_async<T: SlabItem>(&self, id: Id<T>) -> Result<T, WgpuSlabError> {
+        let start = id.index();
+        let end = start + T::SLAB_SIZE;
+        let vec = self.read_raw(start..end).await?;
+        let t = Slab::read_unchecked(vec.as_slice(), Id::<T>::new(0));
+        Ok(t)
+    }
+
+    /// Read from the slab buffer.
     pub async fn read_async<T: SlabItem + Default>(&self, id: Id<T>) -> Result<T, WgpuSlabError> {
         let start = id.index();
         let end = start + T::SLAB_SIZE;
@@ -314,7 +327,6 @@ impl WgpuBuffer {
         let t = Slab::read(vec.as_slice(), Id::<T>::new(0));
         Ok(t)
     }
-
     /// Get the underlying buffer.
     pub fn get_buffer(&self) -> &wgpu::Buffer {
         &self.buffer

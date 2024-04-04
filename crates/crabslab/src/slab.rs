@@ -34,8 +34,18 @@ pub trait Slab {
         id.index() + T::SLAB_SIZE <= self.len()
     }
 
-    /// Read the type from the slab using the Id as the index.
-    fn read<T: SlabItem + Default>(&self, id: Id<T>) -> T;
+    /// Read the type from the slab using the [`Id`] as the index, or return
+    /// the default if `id` is `Id::NONE`.
+    fn read<T: SlabItem + Default>(&self, id: Id<T>) -> T {
+        if id.0 as usize + T::SLAB_SIZE <= self.len() {
+            self.read_unchecked(id)
+        } else {
+            T::default()
+        }
+    }
+
+    /// Read the type from the slab using the [`Id`] as the index.
+    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T;
 
     #[cfg(not(target_arch = "spirv"))]
     fn read_vec<T: SlabItem + Default>(&self, array: crate::array::Array<T>) -> Vec<T> {
@@ -85,12 +95,7 @@ impl Slab for [u32] {
         self.len()
     }
 
-    fn read<T: SlabItem>(&self, id: Id<T>) -> T {
-        debug_assert!(
-            id.0 as usize + T::SLAB_SIZE <= self.len(),
-            "reading {id:?} would read past the length of the slab ({})",
-            self.len()
-        );
+    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
         T::read_slab(id.0 as usize, self)
     }
 
@@ -113,8 +118,8 @@ impl Slab for Vec<u32> {
         self.len()
     }
 
-    fn read<T: SlabItem + Default>(&self, id: Id<T>) -> T {
-        self.as_slice().read(id)
+    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
+        self.as_slice().read_unchecked(id)
     }
 
     fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
@@ -235,8 +240,8 @@ impl<B: Slab> Slab for CpuSlab<B> {
         self.slab.len()
     }
 
-    fn read<T: SlabItem + Default>(&self, id: Id<T>) -> T {
-        self.slab.read(id)
+    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
+        self.slab.read_unchecked(id)
     }
 
     fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
