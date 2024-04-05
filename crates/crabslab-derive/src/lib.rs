@@ -1,5 +1,5 @@
 //! Provides derive macros for `crabslab`.
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::{
     spanned::Spanned, Data, DataEnum, DataStruct, DeriveInput, Fields, FieldsNamed, FieldsUnnamed,
     Ident, Index, Type, TypeTuple, WhereClause, WherePredicate,

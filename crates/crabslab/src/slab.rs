@@ -31,7 +31,7 @@ pub trait Slab {
 
     /// Returns whether the slab may contain the value with the given id.
     fn contains<T: SlabItem>(&self, id: Id<T>) -> bool {
-        id.index() + T::SLAB_SIZE <= self.len()
+        self.len() >= T::SLAB_SIZE && id.index() <= self.len() - T::SLAB_SIZE
     }
 
     /// Read the type from the slab using the [`Id`] as the index, or return
