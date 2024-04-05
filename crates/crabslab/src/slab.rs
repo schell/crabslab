@@ -37,7 +37,7 @@ pub trait Slab {
     /// Read the type from the slab using the [`Id`] as the index, or return
     /// the default if `id` is `Id::NONE`.
     fn read<T: SlabItem + Default>(&self, id: Id<T>) -> T {
-        if id.0 as usize + T::SLAB_SIZE <= self.len() {
+        if self.contains(id) {
             self.read_unchecked(id)
         } else {
             T::default()
@@ -455,5 +455,17 @@ mod blah {
         assert_eq!(Baz::Two { a: 1, b: 2 }, slab.read(two_id));
         assert_eq!(Baz::Three(3, 4), slab.read(three_id));
         assert_eq!(Baz::Four(Bar { a: 5 }), slab.read(four_id));
+    }
+
+    #[test]
+    fn contains_sanity() {
+        let slab = CpuSlab::new(vec![0u32, 1u32, 2u32]);
+        assert!(slab.contains(Id::<u32>::new(0)));
+        assert!(slab.contains(Id::<u32>::new(1)));
+        assert!(slab.contains(Id::<u32>::new(2)));
+        assert!(!slab.contains(Id::<u32>::new(3)));
+        assert!(slab.contains(Id::<(u32, u32, u32)>::new(0)));
+        assert!(!slab.contains(Id::<(u32, u32, u32)>::new(1)));
+        assert!(!slab.contains(Id::<(u32, u32, u32, u32)>::new(0)));
     }
 }
