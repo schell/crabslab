@@ -193,7 +193,7 @@ pub trait GrowableSlab: Slab {
     /// Append to the end of the buffer.
     ///
     /// Returns the `Id` of the written element.
-    fn append<T: SlabItem + Default>(&mut self, t: &T) -> Id<T> {
+    fn append<T: SlabItem>(&mut self, t: &T) -> Id<T> {
         let id = self.allocate::<T>();
         // IGNORED: safe because we just allocated the id
         let _ = self.write(id, t);
@@ -204,7 +204,7 @@ pub trait GrowableSlab: Slab {
     /// and returning a slabbed array.
     ///
     /// Returns the `Array` of the written elements.
-    fn append_array<T: SlabItem + Default>(&mut self, ts: &[T]) -> Array<T> {
+    fn append_array<T: SlabItem>(&mut self, ts: &[T]) -> Array<T> {
         let array = self.allocate_array::<T>(ts.len());
         // IGNORED: safe because we just allocated the array
         let _ = self.write_array(array, ts);
