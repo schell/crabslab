@@ -139,11 +139,8 @@ fn get_params(input: &DeriveInput) -> syn::Result<Params> {
 
 /// Derives `SlabItem` for a struct.
 ///
-/// For structs this will also implement `offset_of_{field}` and `slab_size_of_{field}` functions for each
-/// field, which returns the offset of that field relative to the start of the struct or the size of the field (each in u32):
-///
 /// ```rust
-/// use crabslab::{CpuSlab, GrowableSlab, Slab, SlabItem};
+/// use crabslab::{CpuSlab, GrowableSlab, Id, Slab, SlabItem};
 ///
 /// #[derive(Debug, Default, PartialEq, SlabItem)]
 /// struct Foo {
@@ -160,7 +157,7 @@ fn get_params(input: &DeriveInput) -> syn::Result<Params> {
 /// let foo_two_id = slab.append(&foo_two);
 ///
 /// // Overwrite the second item of the second `Foo`:
-/// slab.write(foo_two_id + Foo::offset_of_b(), &42);
+/// slab.write(Id::<u32>::new(foo_two_id.inner() + 1), &42);
 /// assert_eq!(Foo { a: 4, b: 42, c: 6 }, slab.read(foo_two_id));
 /// ```
 ///
@@ -458,41 +455,7 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
         })
         .collect::<Vec<_>>();
 
-    let mut offset_tys = vec![];
-    let mut offsets = vec![];
-    for (name, ty) in field_names.iter().zip(field_tys.iter()) {
-        let (offset_of_ident, slab_size_of_ident) = match name {
-            FieldName::Index(i) => (
-                Ident::new(&format!("offset_of_{}", i.index), i.span),
-                Ident::new(&format!("slab_size_of_{}", i.index), i.span),
-            ),
-            FieldName::Ident(field) => (
-                Ident::new(&format!("offset_of_{}", field), field.span()),
-                Ident::new(&format!("slab_size_of_{}", field), field.span()),
-            ),
-        };
-        offsets.push(quote! {
-            pub fn #offset_of_ident() -> crabslab::Offset<#ty, Self> {
-                crabslab::Offset::new(
-                    #(<#offset_tys as crabslab::SlabItem>::SLAB_SIZE+)*
-                    0
-                )
-            }
-
-            pub fn #slab_size_of_ident() -> usize {
-                <#ty as crabslab::SlabItem>::SLAB_SIZE
-            }
-        });
-        offset_tys.push(ty.clone());
-    }
-
     let output = quote! {
-        #[automatically_derived]
-        /// Offsets into the slab buffer for each field.
-        impl #impl_generics #name #ty_generics {
-            #(#offsets)*
-        }
-
         #[automatically_derived]
         impl #impl_generics crabslab::SlabItem for #name #ty_generics #where_clause
         {

@@ -78,11 +78,9 @@ impl Light {
 }
 
 fn cpu_code() -> (Id<Light>, Vec<u32>) {
-    // Create a new slab on the CPU-side.
-    // NOTE: For simplicity here we use `Vec<u32>` but if we were using `wgpu`
-    // we could use `crabslab::WgpuBuffer` instead of `Vec<u32>`.
-    // The API is the same.
     let light = Light::standard();
+    // Create a new slab on the CPU-side.
+    // Using CpuSlab make `append` unambiguous, as `Vec` has its own `append` function.
     let mut slab = CpuSlab::new(vec![]);
     let id = slab.append(&light);
     (id, slab.into_inner())
