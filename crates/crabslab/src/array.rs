@@ -111,16 +111,14 @@ impl<T: SlabItem> SlabItem for Array<T> {
 
 impl<T: SlabItem> Default for Array<T> {
     fn default() -> Self {
-        Self {
-            index: u32::MAX,
-            len: 0,
-            _phantom: PhantomData,
-        }
+        Array::NONE
     }
 }
 
 impl<T> Array<T> {
-    pub fn new(index: u32, len: u32) -> Self {
+    pub const NONE: Self = Array::new(u32::MAX, 0);
+
+    pub const fn new(index: u32, len: u32) -> Self {
         Self {
             index,
             len,
