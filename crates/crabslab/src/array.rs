@@ -40,9 +40,9 @@ impl<T: SlabItem> Iterator for ArrayIter<T> {
 #[repr(C)]
 pub struct Array<T> {
     // u32 offset in the slab
-    index: u32,
+    pub index: u32,
     // number of `T` elements in the array
-    len: u32,
+    pub len: u32,
     _phantom: PhantomData<T>,
 }
 
@@ -184,5 +184,14 @@ impl<T> Array<T> {
     {
         let arr = self.into_u32_array();
         &slab[arr.index as usize..(arr.index + arr.len) as usize]
+    }
+}
+
+impl Array<u32> {
+    pub fn union(&mut self, other: &Array<u32>) {
+        let start = self.index.min(other.index);
+        let end = (self.index + self.len).max(other.index + other.len);
+        self.index = start;
+        self.len = end - start;
     }
 }

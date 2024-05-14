@@ -11,4 +11,4 @@ exclude = ["./shaders"]
 resolver = "2"
 
 [workspace.dependencies]
-glam = { path = "../glam-rs", version = "0.27", default-features = false }
+glam = { version = "0.24", default-features = false }
