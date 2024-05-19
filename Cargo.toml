@@ -2,7 +2,6 @@
 members = [
     "crates/crabslab",
     "crates/crabslab-derive",
-    "crates/example",
 ]
 
 # 'shaders' contains a test spirv shader to measure filesize when using crabslab

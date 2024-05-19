@@ -47,8 +47,6 @@ reads them out symmetrically.
   - `Array`
   - `Offset`
 * a helper struct `CpuSlab` which wraps anything implementing `GrowableSlab`
-* a feature-gated helper for using slabs with `wgpu` - `WgpuBuffer`
-  - [example](https://github.com/schell/crabslab/blob/main/crates/crabslab/src/wgpu_slab.rs#L356)
 * feature for deriving `SlabItem` for `glam` types
 
 # Example

@@ -1,6 +1,6 @@
 [package]
 name = "crabslab"
-version = "0.4.8"
+version = "0.5.0"
 edition = "2021"
 description = "Slab allocator focused on GPU compute (rust-gpu)"
 repository = "https://github.com/schell/crabslab"
@@ -12,10 +12,9 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = ["wgpu", "glam", "futures-lite"]
+default = ["glam", "futures-lite"]
 futures-lite = ["dep:futures-lite"]
 glam = ["dep:glam"]
-wgpu = ["dep:wgpu", "dep:bytemuck", "dep:snafu", "dep:async-channel", "dep:log"]
 
 [dependencies]
 async-channel = {version = "1.8", optional=true}
@@ -24,7 +23,6 @@ futures-lite = {version = "1.13", optional=true}
 log = {version = "0.4", optional=true}
 crabslab-derive = { version = "0.4.1", path = "../crabslab-derive" }
 snafu = {version = "0.7", optional=true}
-wgpu = {version = "0.19", optional=true}
 
 [target.'cfg(not(target_arch = "spirv"))'.dependencies]
 glam = { workspace = true, features = ["std"], optional = true }
