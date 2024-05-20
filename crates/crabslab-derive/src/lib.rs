@@ -468,12 +468,7 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
             }
 
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-                if slab.len() < index + Self::SLAB_SIZE {
-                    return index;
-                }
-
                 #(#write_index_field_names)*
-
                 index
             }
         }

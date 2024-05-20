@@ -37,14 +37,17 @@ impl<T: SlabItem + Copy + Default, const N: usize> SlabItem for [T; N] {
         let mut array = [T::default(); N];
         for i in 0..N {
             let j = index + i * T::SLAB_SIZE;
-            array[i] = T::read_slab(j, slab);
+            let t = T::read_slab(j, slab);
+            let a: &mut T = crate::array_index_mut(&mut array, i);
+            *a = t;
         }
         array
     }
 
     fn write_slab(&self, mut index: usize, slab: &mut [u32]) -> usize {
         for i in 0..N {
-            index = self[i].write_slab(index, slab);
+            let n = crate::slice_index(self, i);
+            index = n.write_slab(index, slab);
         }
         index
     }

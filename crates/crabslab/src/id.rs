@@ -14,11 +14,11 @@ impl<T: core::any::Any> SlabItem for Id<T> {
     const SLAB_SIZE: usize = { 1 };
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
-        Id::new(slab[index as usize])
+        Id::new(*crate::slice_index(slab, index as usize))
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        slab[index as usize] = self.0;
+        *crate::slice_index_mut(slab, index as usize) = self.0;
         index + 1
     }
 }

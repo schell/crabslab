@@ -6,16 +6,12 @@ macro_rules! impl_underflow_primitive {
             const SLAB_SIZE: usize = { 1 };
 
             fn read_slab(index: usize, slab: &[u32]) -> Self {
-                slab[index] as $type
+                *crate::slice_index(slab, index) as $type
             }
 
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-                if slab.len() > index {
-                    slab[index] = *self as u32;
-                    index + 1
-                } else {
-                    index
-                }
+                *crate::slice_index_mut(slab, index) = *self as u32;
+                index + 1
             }
         }
     };
@@ -28,19 +24,15 @@ macro_rules! impl_overflow_primitive {
 
             fn read_slab(index: usize, slab: &[u32]) -> Self {
                 (0..$num_slots).fold(0, |acc, i| {
-                    acc | ((<$type>::from(slab[index + i])) << (i * 32))
+                    acc | ((<$type>::from(*crate::slice_index(slab, index + i))) << (i * 32))
                 })
             }
 
             fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-                if slab.len() >= index + $num_slots {
-                    for i in 0..$num_slots {
-                        slab[index + i] = (*self >> (i * 32)) as u32;
-                    }
-                    index + $num_slots
-                } else {
-                    index
+                for i in 0..$num_slots {
+                    *crate::slice_index_mut(slab, index + i) = (*self >> (i * 32)) as u32;
                 }
+                index + $num_slots
             }
         }
     };
@@ -62,16 +54,13 @@ impl SlabItem for f32 {
     const SLAB_SIZE: usize = { 1 };
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
-        f32::from_bits(slab[index])
+        let bits = crate::slice_index(slab, index);
+        f32::from_bits(*bits)
     }
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        if slab.len() > index {
-            slab[index] = self.to_bits();
-            index + 1
-        } else {
-            index
-        }
+        *crate::slice_index_mut(slab, index) = self.to_bits();
+        index + 1
     }
 }
 

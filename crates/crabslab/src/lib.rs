@@ -4,20 +4,14 @@
 #![doc = include_str!("../README.md")]
 
 mod array;
-pub use array::*;
-
 mod id;
-pub use id::*;
-
 mod slab;
-pub use slab::*;
-
-#[cfg(feature = "wgpu")]
-mod wgpu_slab;
-#[cfg(feature = "wgpu")]
-pub use wgpu_slab::*;
 
 pub mod impl_slab_item;
+
+pub use array::*;
+pub use id::*;
+pub use slab::*;
 
 pub use crabslab_derive::SlabItem;
 
@@ -36,4 +30,52 @@ pub const fn __saturating_sub(a: usize, b: usize) -> usize {
     } else {
         a - b
     }
+}
+
+#[cfg(not(target_arch = "spirv"))]
+#[inline]
+pub fn slice_index<T>(slab: &[T], index: usize) -> &T {
+    &slab[index]
+}
+
+#[cfg(not(target_arch = "spirv"))]
+#[inline]
+pub fn slice_index_mut<T>(slab: &mut [T], index: usize) -> &mut T {
+    &mut slab[index]
+}
+
+#[cfg(target_arch = "spirv")]
+#[inline]
+pub fn slice_index<T>(slab: &[T], index: usize) -> &T {
+    unsafe { spirv_std::arch::IndexUnchecked::index_unchecked(slab, index) }
+}
+
+#[cfg(target_arch = "spirv")]
+#[inline]
+pub fn slice_index_mut<T>(slab: &mut [T], index: usize) -> &mut T {
+    unsafe { spirv_std::arch::IndexUnchecked::index_unchecked_mut(slab, index) }
+}
+
+#[cfg(not(target_arch = "spirv"))]
+#[inline]
+pub fn array_index<const N: usize, T>(slab: &[T; N], index: usize) -> &T {
+    &slab[index]
+}
+
+#[cfg(not(target_arch = "spirv"))]
+#[inline]
+pub fn array_index_mut<const N: usize, T>(slab: &mut [T; N], index: usize) -> &mut T {
+    &mut slab[index]
+}
+
+#[cfg(target_arch = "spirv")]
+#[inline]
+pub fn array_index<const N: usize, T>(slab: &[T; N], index: usize) -> &T {
+    unsafe { spirv_std::arch::IndexUnchecked::index_unchecked(slab, index) }
+}
+
+#[cfg(target_arch = "spirv")]
+#[inline]
+pub fn array_index_mut<const N: usize, T>(slab: &mut [T; N], index: usize) -> &mut T {
+    unsafe { spirv_std::arch::IndexUnchecked::index_unchecked_mut(slab, index) }
 }
