@@ -30,11 +30,14 @@ impl<T: SlabItem + Default> SlabItem for Option<T> {
     }
 }
 
-impl<T: SlabItem + Copy + Default, const N: usize> SlabItem for [T; N] {
+impl<T: SlabItem + Copy + Default, const N: usize> SlabItem for [T; N]
+where
+    [T; N]: Default,
+{
     const SLAB_SIZE: usize = { <T as SlabItem>::SLAB_SIZE * N };
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
-        let mut array = [T::default(); N];
+        let mut array: [T; N] = Default::default();
         for i in 0..N {
             let j = index + i * T::SLAB_SIZE;
             let t = T::read_slab(j, slab);
