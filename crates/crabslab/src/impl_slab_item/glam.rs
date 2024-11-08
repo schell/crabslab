@@ -41,8 +41,7 @@ impl SlabItem for glam::Vec2 {
             return index;
         }
         let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        index
+        self.y.write_slab(index, slab)
     }
 }
 
@@ -60,8 +59,7 @@ impl SlabItem for glam::Vec3 {
         let Self { x, y, z } = self;
         let index = x.write_slab(index, slab);
         let index = y.write_slab(index, slab);
-        let index = z.write_slab(index, slab);
-        index
+        z.write_slab(index, slab)
     }
 }
 

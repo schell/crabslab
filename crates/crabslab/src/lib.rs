@@ -8,6 +8,7 @@ mod id;
 mod slab;
 
 pub mod impl_slab_item;
+pub mod offset;
 
 pub use array::*;
 pub use id::*;

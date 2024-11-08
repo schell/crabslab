@@ -29,7 +29,11 @@ pub trait Slab {
     /// Return the number of u32 elements in the slab.
     fn len(&self) -> usize;
 
-    /// Returns whether the slab may contain the value with the given id.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns `true` if the slab size is great enough to contain the value with the given id.
     fn contains<T: SlabItem>(&self, id: Id<T>) -> bool {
         self.len() >= T::SLAB_SIZE && id.index() <= self.len() - T::SLAB_SIZE
     }
@@ -46,6 +50,12 @@ pub trait Slab {
 
     /// Read the type from the slab using the [`Id`] as the index.
     fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T;
+
+    fn read_into_if_some<T: SlabItem>(&self, id: Id<T>, t: &mut T) {
+        if id.is_some() {
+            *t = self.read_unchecked(id);
+        }
+    }
 
     #[cfg(not(target_arch = "spirv"))]
     fn read_vec<T: SlabItem + Default>(&self, array: crate::array::Array<T>) -> Vec<T> {

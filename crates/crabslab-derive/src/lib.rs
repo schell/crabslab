@@ -197,13 +197,30 @@ fn get_params(input: &DeriveInput) -> syn::Result<Params> {
 /// assert_eq!(Baz::Three(3, 4), slab.read(three_id));
 /// assert_eq!(Baz::Four(Bar { a: 5 }), slab.read(four_id));
 /// ```
-#[proc_macro_derive(SlabItem)]
+#[proc_macro_derive(SlabItem, attributes(offsets))]
 pub fn derive_from_slab(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: DeriveInput = syn::parse_macro_input!(input);
 
+    let gen_offsets_span = input.attrs.iter().find_map(|attr| {
+        let path = attr.path();
+        if path.is_ident("offsets") {
+            Some(path.span())
+        } else {
+            None
+        }
+    });
+
     match get_params(&input) {
-        Ok(Params::Struct(p)) => derive_from_slab_struct(input, p),
-        Ok(Params::Enum(p)) => derive_from_slab_enum(input, p),
+        Ok(Params::Struct(p)) => derive_from_slab_struct(input, p, gen_offsets_span.is_some()),
+        Ok(Params::Enum(p)) => {
+            if let Some(span) = gen_offsets_span {
+                syn::Error::new(span, "Deriving field offsets is not supported for enums")
+                    .into_compile_error()
+                    .into()
+            } else {
+                derive_from_slab_enum(input, p)
+            }
+        }
         Err(e) => e.into_compile_error().into(),
     }
 }
@@ -388,17 +405,19 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
     output.into()
 }
 
-fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macro::TokenStream {
+fn derive_from_slab_struct(
+    input: DeriveInput,
+    params: FieldParams,
+    // Whether to generate field offsets
+    gen_offsets: bool,
+) -> proc_macro::TokenStream {
     let FieldParams {
         field_tys,
         field_names,
     } = params;
 
     let name = &input.ident;
-    let is_struct_style = match field_names.first() {
-        Some(FieldName::Index(_)) => false,
-        _ => true,
-    };
+    let is_struct_style = !matches!(field_names.first(), Some(FieldName::Index(_)));
     let mut generics = input.generics;
     {
         /// Adds a `CanFetch<'lt>` bound on each of the system data types.
@@ -455,6 +474,51 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
         })
         .collect::<Vec<_>>();
 
+    let mut offset_tys = vec![];
+    let mut offsets = vec![];
+    for (name, ty) in field_names.iter().zip(field_tys.iter()) {
+        let (offset_of_ident, slab_size_of_ident) = match name {
+            FieldName::Index(i) => (
+                Ident::new(&format!("OFFSET_OF_{}", i.index), i.span),
+                Ident::new(&format!("SLAB_SIZE_OF_{}", i.index), i.span),
+            ),
+            FieldName::Ident(field) => (
+                Ident::new(
+                    &format!("OFFSET_OF_{}", field.to_string().to_uppercase()),
+                    field.span(),
+                ),
+                Ident::new(
+                    &format!("SLAB_SIZE_OF_{}", field.to_string().to_uppercase()),
+                    field.span(),
+                ),
+            ),
+        };
+        offsets.push(quote! {
+            pub const #offset_of_ident: crabslab::offset::Offset<#ty, Self> = {
+                crabslab::offset::Offset::new(
+                    #(<#offset_tys as crabslab::SlabItem>::SLAB_SIZE+)*
+                    0
+                )
+            };
+            pub const #slab_size_of_ident: usize = {
+                <#ty as crabslab::SlabItem>::SLAB_SIZE
+            };
+        });
+        offset_tys.push(ty.clone());
+    }
+
+    let offsets_output = if gen_offsets {
+        quote! {
+            #[automatically_derived]
+            /// Offsets into the slab buffer for each field.
+            impl #impl_generics #name #ty_generics {
+                #(#offsets)*
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let output = quote! {
         #[automatically_derived]
         impl #impl_generics crabslab::SlabItem for #name #ty_generics #where_clause
@@ -472,6 +536,7 @@ fn derive_from_slab_struct(input: DeriveInput, params: FieldParams) -> proc_macr
                 index
             }
         }
+        #offsets_output
     };
     output.into()
 }
