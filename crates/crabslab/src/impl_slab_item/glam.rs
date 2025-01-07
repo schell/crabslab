@@ -112,8 +112,7 @@ impl SlabItem for glam::UVec2 {
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
         let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        index
+        self.y.write_slab(index, slab)
     }
 }
 
@@ -131,8 +130,7 @@ impl SlabItem for glam::UVec3 {
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
         let index = self.x.write_slab(index, slab);
         let index = self.y.write_slab(index, slab);
-        let index = self.z.write_slab(index, slab);
-        index
+        self.z.write_slab(index, slab)
     }
 }
 
@@ -152,7 +150,6 @@ impl SlabItem for glam::UVec4 {
         let index = self.x.write_slab(index, slab);
         let index = self.y.write_slab(index, slab);
         let index = self.z.write_slab(index, slab);
-        let index = self.w.write_slab(index, slab);
-        index
+        self.w.write_slab(index, slab)
     }
 }

@@ -206,7 +206,7 @@ pub trait GrowableSlab: Slab {
     fn append<T: SlabItem>(&mut self, t: &T) -> Id<T> {
         let id = self.allocate::<T>();
         // IGNORED: safe because we just allocated the id
-        let _ = self.write(id, t);
+        self.write(id, t);
         id
     }
 
@@ -217,7 +217,7 @@ pub trait GrowableSlab: Slab {
     fn append_array<T: SlabItem>(&mut self, ts: &[T]) -> Array<T> {
         let array = self.allocate_array::<T>(ts.len());
         // IGNORED: safe because we just allocated the array
-        let _ = self.write_array(array, ts);
+        self.write_array(array, ts);
         array
     }
 }

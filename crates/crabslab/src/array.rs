@@ -48,11 +48,7 @@ pub struct Array<T> {
 
 impl<T> Clone for Array<T> {
     fn clone(&self) -> Self {
-        Self {
-            index: self.index,
-            len: self.len,
-            _phantom: PhantomData,
-        }
+        *self
     }
 }
 
@@ -98,8 +94,7 @@ impl<T: SlabItem> SlabItem for Array<T> {
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
         let index = self.index.write_slab(index, slab);
-        let index = self.len.write_slab(index, slab);
-        index
+        self.len.write_slab(index, slab)
     }
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
@@ -178,7 +173,7 @@ impl<T> Array<T> {
 
     #[cfg(not(target_arch = "spirv"))]
     /// Return the slice of the slab that this array represents.
-    pub fn sub_slab<'a>(&'a self, slab: &'a [u32]) -> &[u32]
+    pub fn sub_slab<'a>(&'a self, slab: &'a [u32]) -> &'a [u32]
     where
         T: SlabItem,
     {
