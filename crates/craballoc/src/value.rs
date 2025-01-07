@@ -132,6 +132,10 @@ impl<T> WeakHybrid<T> {
     pub fn has_external_references(&self) -> bool {
         self.strong_count() > 0
     }
+
+    pub fn weak_gpu(&self) -> &WeakGpu<T> {
+        &self.weak_gpu
+    }
 }
 
 /// A "hybrid" type that lives on the CPU and the GPU.
