@@ -4,6 +4,9 @@ use core::marker::PhantomData;
 
 use crate::Id;
 
+#[cfg(doc)]
+use crate::SlabItem;
+
 /// The slab offset of field `F` within a type `T`.
 ///
 /// An offset `Offset<F, T>` can be added to an [`Id<T>`](Id) to get an

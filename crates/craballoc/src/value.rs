@@ -130,7 +130,8 @@ impl<T> WeakHybrid<T> {
 
 /// A "hybrid" type that lives on the CPU and the GPU.
 ///
-/// Updates are syncronized to the GPU once per frame.
+/// Updates are syncronized to the GPU at the behest of the
+/// `SlabAllocator<T>` that created this value.
 ///
 /// Clones of a hybrid all point to the same CPU and GPU data.
 pub struct Hybrid<T> {
@@ -200,9 +201,10 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
     }
 }
 
-/// A type that lives on the GPU.
+/// A type that lives only on the GPU.
 ///
-/// Updates are synchronized to the GPU during [`SlabAllocator::upkeep`].
+/// Updates are synchronized to the GPU at the behest of the [`SlabAllocator`]
+/// that created this value.
 pub struct Gpu<T> {
     pub(crate) id: Id<T>,
     pub(crate) notifier_index: usize,
@@ -265,7 +267,8 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
 ///
 /// Once created, the array cannot be resized.
 ///
-/// Updates are syncronized to the GPU once per frame.
+/// Updates are syncronized to the GPU at the behest of the
+/// [`SlabAllocator`] that created this array.
 #[derive(Debug)]
 pub struct GpuArray<T> {
     array: Array<T>,
@@ -347,7 +350,8 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
 ///
 /// Once created, the array cannot be resized.
 ///
-/// Updates are syncronized to the GPU once per frame.
+/// Updates are syncronized to the GPU at the behest of the
+/// [`SlabAllocator`] that created this array.
 pub struct HybridArray<T> {
     cpu_value: Arc<RwLock<Vec<T>>>,
     gpu_value: GpuArray<T>,

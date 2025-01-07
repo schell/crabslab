@@ -13,10 +13,9 @@ use crate::{
 
 #[cfg(feature = "wgpu")]
 mod wgpu_slab;
-#[cfg(feature = "wgpu")]
-pub use wgpu_slab::*;
 
 #[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum SlabAllocatorError {
     #[snafu(display(
         "Slab has no internal buffer. Please call SlabAllocator::upkeep or \
@@ -30,6 +29,9 @@ pub enum SlabAllocatorError {
     #[cfg(feature = "wgpu")]
     #[snafu(display("Async error: {source}"))]
     Async { source: wgpu::BufferAsyncError },
+
+    #[snafu(display("{source}"))]
+    Other { source: Box<dyn std::error::Error> },
 }
 
 /// Manages slab allocations and updates over a parameterised buffer.
@@ -47,10 +49,10 @@ pub struct SlabAllocator<Runtime: IsRuntime> {
     needs_expansion: Arc<AtomicBool>,
     buffer: Arc<RwLock<Option<Arc<Runtime::Buffer>>>>,
     buffer_usages: Runtime::BufferUsages,
-    update_k: Arc<AtomicUsize>,
-    update_sources: Arc<RwLock<FxHashMap<usize, WeakGpuRef>>>,
+    pub(crate) update_k: Arc<AtomicUsize>,
+    pub(crate) update_sources: Arc<RwLock<FxHashMap<usize, WeakGpuRef>>>,
     update_queue: Arc<RwLock<FxHashSet<usize>>>,
-    recycles: Arc<RwLock<RangeManager<Range>>>,
+    pub(crate) recycles: Arc<RwLock<RangeManager<Range>>>,
 }
 
 impl<R: IsRuntime> Clone for SlabAllocator<R> {
