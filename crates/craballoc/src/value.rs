@@ -271,6 +271,11 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
         // UNWRAP: safe because it's unbound
         self.notify.try_send(self.notifier_index).unwrap();
     }
+
+    /// A unique identifier.
+    pub fn notifier_index(&self) -> usize {
+        self.notifier_index
+    }
 }
 
 /// A array type that lives on the GPU.
