@@ -89,6 +89,8 @@ impl<T> WeakGpu<T> {
     }
 }
 
+/// A hybrid value that holds a non-owning reference
+/// to the underlying data.
 #[derive(Debug)]
 pub struct WeakHybrid<T> {
     pub(crate) weak_cpu: Weak<RwLock<T>>,
@@ -125,6 +127,10 @@ impl<T> WeakHybrid<T> {
 
     pub fn strong_count(&self) -> usize {
         self.weak_gpu.update.strong_count()
+    }
+
+    pub fn has_external_references(&self) -> bool {
+        self.strong_count() > 0
     }
 }
 
