@@ -74,6 +74,7 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
 }
 
 impl<R: IsRuntime> SlabAllocator<R> {
+    // TODO: add label to SlabAllocator::new
     pub fn new(runtime: impl AsRef<R>, default_buffer_usages: R::BufferUsages) -> Self {
         Self {
             runtime: runtime.as_ref().clone(),

@@ -107,6 +107,12 @@ pub(crate) fn range_to_indices_and_len(
 #[derive(Clone, Copy)]
 pub struct CpuRuntime;
 
+impl AsRef<CpuRuntime> for CpuRuntime {
+    fn as_ref(&self) -> &CpuRuntime {
+        self
+    }
+}
+
 /// A slab buffer used _only_ on the GPU.
 ///
 /// This is mostly for testing.

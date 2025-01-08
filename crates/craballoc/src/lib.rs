@@ -29,8 +29,7 @@ mod test {
 
     #[test]
     fn mngr_updates_count_sanity() {
-        let runtime = CpuRuntime;
-        let slab = SlabAllocator::<CpuRuntime>::new(&runtime, ());
+        let slab = SlabAllocator::new(CpuRuntime, ());
         {
             let value = slab.new_value(666u32);
             assert_eq!(
@@ -77,7 +76,7 @@ mod test {
 
     #[test]
     fn slab_manager_sanity() {
-        let m = SlabAllocator::new(&CpuRuntime, ());
+        let m = SlabAllocator::new(CpuRuntime, ());
         log::info!("allocating 4 unused u32 slots");
         let _ = m.allocate::<u32>();
         let _ = m.allocate::<u32>();
