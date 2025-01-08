@@ -212,7 +212,10 @@ impl IsRuntime for WgpuRuntime {
         self.device.create_buffer(&wgpu::BufferDescriptor {
             label,
             size,
-            usage: usages,
+            usage: usages
+                | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         })
     }
