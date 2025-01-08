@@ -44,6 +44,7 @@ pub enum SlabAllocatorError {
 pub struct SlabAllocator<Runtime: IsRuntime> {
     pub(crate) notifier: (async_channel::Sender<usize>, async_channel::Receiver<usize>),
     runtime: Runtime,
+    label: Arc<Option<String>>,
     len: Arc<AtomicUsize>,
     capacity: Arc<AtomicUsize>,
     needs_expansion: Arc<AtomicBool>,
@@ -60,6 +61,7 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
         SlabAllocator {
             runtime: self.runtime.clone(),
             notifier: self.notifier.clone(),
+            label: self.label.clone(),
             len: self.len.clone(),
             capacity: self.capacity.clone(),
             needs_expansion: self.needs_expansion.clone(),
@@ -74,10 +76,19 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
 }
 
 impl<R: IsRuntime> SlabAllocator<R> {
-    // TODO: add label to SlabAllocator::new
     pub fn new(runtime: impl AsRef<R>, default_buffer_usages: R::BufferUsages) -> Self {
+        Self::new_with_label(runtime, default_buffer_usages, None)
+    }
+
+    pub fn new_with_label(
+        runtime: impl AsRef<R>,
+        default_buffer_usages: R::BufferUsages,
+        label: Option<&str>,
+    ) -> Self {
+        let label = Arc::new(label.map(|s| s.to_owned()));
         Self {
             runtime: runtime.as_ref().clone(),
+            label,
             notifier: async_channel::unbounded(),
             update_k: Default::default(),
             update_sources: Default::default(),
@@ -227,12 +238,13 @@ impl<R: IsRuntime> SlabAllocator<R> {
     fn recreate_buffer(&self) -> Arc<R::Buffer> {
         let new_buffer = Arc::new(self.runtime.buffer_create(
             self.capacity(),
-            None,
+            self.label.as_deref(),
             self.buffer_usages.clone(),
         ));
         let mut guard = self.buffer.write().unwrap();
         if let Some(old_buffer) = guard.take() {
-            self.runtime.buffer_copy(&old_buffer, &new_buffer, None);
+            self.runtime
+                .buffer_copy(&old_buffer, &new_buffer, self.label.as_deref());
         }
         *guard = Some(new_buffer.clone());
         new_buffer
