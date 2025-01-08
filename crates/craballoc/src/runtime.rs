@@ -176,6 +176,12 @@ pub struct WgpuRuntime {
     pub queue: Arc<wgpu::Queue>,
 }
 
+impl AsRef<WgpuRuntime> for WgpuRuntime {
+    fn as_ref(&self) -> &WgpuRuntime {
+        self
+    }
+}
+
 #[cfg(feature = "wgpu")]
 impl IsRuntime for WgpuRuntime {
     type Buffer = wgpu::Buffer;
