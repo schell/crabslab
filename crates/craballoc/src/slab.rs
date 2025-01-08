@@ -74,9 +74,9 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
 }
 
 impl<R: IsRuntime> SlabAllocator<R> {
-    pub fn new(runtime: &R, default_buffer_usages: R::BufferUsages) -> Self {
+    pub fn new(runtime: impl AsRef<R>, default_buffer_usages: R::BufferUsages) -> Self {
         Self {
-            runtime: runtime.clone(),
+            runtime: runtime.as_ref().clone(),
             notifier: async_channel::unbounded(),
             update_k: Default::default(),
             update_sources: Default::default(),
