@@ -3,7 +3,10 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use crabslab::{Array, Id, SlabItem};
 use rustc_hash::{FxHashMap, FxHashSet};
 use snafu::prelude::*;
-use std::sync::{atomic::AtomicBool, Arc, RwLock};
+use std::{
+    ops::Deref,
+    sync::{atomic::AtomicBool, Arc, RwLock},
+};
 
 use crate::{
     range::{Range, RangeManager},
@@ -34,6 +37,65 @@ pub enum SlabAllocatorError {
     Other { source: Box<dyn std::error::Error> },
 }
 
+/// A thin wrapper around a buffer `T` that provides the ability to tell
+/// if the buffer has been invalidated by the [`SlabAllocator`] that it
+/// originated from.
+///
+/// Invalidation happens when the slab resizes. For this reason it is
+/// important to create as many values as necessary _before_ calling
+/// [`SlabAllocator::get_updated_buffer`] to avoid unnecessary invalidation.
+pub struct SlabBuffer<T> {
+    // Id of the slab's last buffer invalidation.
+    slab_invalidation_k: Arc<AtomicUsize>,
+    // The slab's `slab_update_k` at the time of this buffer's creation.
+    buffer_creation_k: usize,
+    buffer: Arc<T>,
+}
+
+impl<T> Clone for SlabBuffer<T> {
+    fn clone(&self) -> Self {
+        Self {
+            slab_invalidation_k: self.slab_invalidation_k.clone(),
+            buffer_creation_k: self.buffer_creation_k,
+            buffer: self.buffer.clone(),
+        }
+    }
+}
+
+impl<T> Deref for SlabBuffer<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
+    }
+}
+
+impl<T> SlabBuffer<T> {
+    fn new(invalidation_k: Arc<AtomicUsize>, buffer: T) -> Self {
+        SlabBuffer {
+            buffer: buffer.into(),
+            buffer_creation_k: invalidation_k.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1,
+            slab_invalidation_k: invalidation_k,
+        }
+    }
+
+    /// Determines whether this buffer has been invalidated by the slab
+    /// it originated from.
+    pub fn is_invalid(&self) -> bool {
+        let last_invalidation_k = self
+            .slab_invalidation_k
+            .load(std::sync::atomic::Ordering::Relaxed);
+        self.buffer_creation_k < last_invalidation_k
+    }
+
+    /// Determines whether this buffer has been invalidated by the slab
+    /// it originated from.
+    pub fn is_valid(&self) -> bool {
+        !self.is_invalid()
+    }
+}
+
 /// Manages slab allocations and updates over a parameterised buffer.
 ///
 /// Create a new instance using [`SlabAllocator::new`].
@@ -48,8 +110,9 @@ pub struct SlabAllocator<Runtime: IsRuntime> {
     len: Arc<AtomicUsize>,
     capacity: Arc<AtomicUsize>,
     needs_expansion: Arc<AtomicBool>,
-    buffer: Arc<RwLock<Option<Arc<Runtime::Buffer>>>>,
+    buffer: Arc<RwLock<Option<SlabBuffer<Runtime::Buffer>>>>,
     buffer_usages: Runtime::BufferUsages,
+    invalidation_k: Arc<AtomicUsize>,
     pub(crate) update_k: Arc<AtomicUsize>,
     pub(crate) update_sources: Arc<RwLock<FxHashMap<usize, WeakGpuRef>>>,
     update_queue: Arc<RwLock<FxHashSet<usize>>>,
@@ -67,6 +130,7 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
             needs_expansion: self.needs_expansion.clone(),
             buffer: self.buffer.clone(),
             buffer_usages: self.buffer_usages.clone(),
+            invalidation_k: self.invalidation_k.clone(),
             update_k: self.update_k.clone(),
             update_sources: self.update_sources.clone(),
             update_queue: self.update_queue.clone(),
@@ -101,6 +165,7 @@ impl<R: IsRuntime> SlabAllocator<R> {
             needs_expansion: Arc::new(true.into()),
             buffer: Default::default(),
             buffer_usages: default_buffer_usages,
+            invalidation_k: Default::default(),
         }
     }
 
@@ -198,56 +263,28 @@ impl<R: IsRuntime> SlabAllocator<R> {
         }
     }
 
-    /// Return the internal buffer used by this slab.
-    ///
-    /// If the buffer needs recreating due to a capacity change this function
-    /// will return `None`. In that case use [`Self::get_updated_buffer`].
-    pub fn get_buffer(&self) -> Option<Arc<R::Buffer>> {
-        self.buffer.read().unwrap().as_ref().cloned()
+    /// Return the internal buffer used by this slab, if it has
+    /// been created.
+    pub fn get_buffer(&self) -> Option<SlabBuffer<R::Buffer>> {
+        self.buffer.read().unwrap().clone()
     }
 
-    /// Return an updated buffer.
-    ///
-    /// This is the only way to guarantee access to a buffer.
-    ///
-    /// Use [`SlabAllocator::upkeep`] when you only need the buffer after a
-    /// change, for example to recreate bindgroups.
-    pub fn get_updated_buffer(&self) -> Arc<R::Buffer> {
-        self.get_updated_buffer_and_check().0
-    }
-
-    /// Return an updated buffer, and whether or not it is different from the
-    /// last one.
-    ///
-    /// This is the only way to guarantee access to a buffer.
-    ///
-    /// Use [`SlabAllocator::upkeep`] when you only need the buffer after a
-    /// change, for example to recreate bindgroups.
-    pub fn get_updated_buffer_and_check(&self) -> (Arc<R::Buffer>, bool) {
-        if let Some(new_buffer) = self.upkeep() {
-            (new_buffer, true)
-        } else {
-            // UNWRAP: safe because we know the buffer exists at this point,
-            // as we've called `upkeep` above
-            (self.get_buffer().unwrap(), false)
-        }
-    }
-
-    /// Recreate this buffer, writing the contents of the previous buffer (if it
+    /// Recreate the internal buffer, writing the contents of the previous buffer (if it
     /// exists) to the new one, then return the new buffer.
-    fn recreate_buffer(&self) -> Arc<R::Buffer> {
-        let new_buffer = Arc::new(self.runtime.buffer_create(
+    fn recreate_buffer(&self) -> SlabBuffer<R::Buffer> {
+        let new_buffer = self.runtime.buffer_create(
             self.capacity(),
             self.label.as_deref(),
             self.buffer_usages.clone(),
-        ));
+        );
         let mut guard = self.buffer.write().unwrap();
         if let Some(old_buffer) = guard.take() {
             self.runtime
                 .buffer_copy(&old_buffer, &new_buffer, self.label.as_deref());
         }
-        *guard = Some(new_buffer.clone());
-        new_buffer
+        let slab_buffer = SlabBuffer::new(self.invalidation_k.clone(), new_buffer);
+        *guard = Some(slab_buffer.clone());
+        slab_buffer
     }
 
     /// Stage a new value that lives on the GPU _and_ CPU.
@@ -336,24 +373,21 @@ impl<R: IsRuntime> SlabAllocator<R> {
 
     /// Perform upkeep on the slab, commiting changes to the GPU.
     ///
-    /// Returns the new buffer if one was created due to a capacity resize.
+    /// Returns the [`SlabBuffer`] currently used by the allocator.
     #[must_use]
-    pub fn upkeep(&self) -> Option<Arc<R::Buffer>> {
-        let new_buffer = if self.needs_expansion.swap(false, Ordering::Relaxed) {
-            Some(self.recreate_buffer())
+    pub fn upkeep(&self) -> SlabBuffer<R::Buffer> {
+        let buffer = if self.needs_expansion.swap(false, Ordering::Relaxed) {
+            self.recreate_buffer()
         } else {
-            None
+            // UNWRAP: Safe because we know it exists or else it would need expansion
+            self.get_buffer().unwrap()
         };
-
         let writes = self.drain_updated_sources();
         if !writes.is_empty() {
-            // UNWRAP: safe because we know the buffer exists at this point, as we may have
-            // recreated it above^
-            let buffer = self.get_buffer().unwrap();
             self.runtime
                 .buffer_write(writes.ranges.into_iter(), &buffer);
         }
-        new_buffer
+        buffer
     }
 
     /// Defragments the internal "recycle" buffer.

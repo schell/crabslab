@@ -22,13 +22,6 @@ pub struct SlabUpdate {
 }
 
 impl SlabUpdate {
-    // pub fn range(&self) -> Range {
-    //     Range {
-    //         first_index: self.array.starting_index() as u32,
-    //         last_index: (self.array.starting_index() + self.array.len()) as u32 -
-    // 1,     }
-    // }
-
     pub fn intersects(&self, other: &Self) -> bool {
         let here_start = self.array.index;
         let there_start = other.array.index;

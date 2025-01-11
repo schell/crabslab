@@ -30,6 +30,7 @@ mod test {
     #[test]
     fn mngr_updates_count_sanity() {
         let slab = SlabAllocator::new(CpuRuntime, ());
+        assert!(slab.get_buffer().is_none());
         {
             let value = slab.new_value(666u32);
             assert_eq!(
@@ -38,7 +39,7 @@ mod test {
                 "slab should not retain a count on value"
             );
         }
-        let _ = slab.upkeep();
+        let buffer = slab.upkeep();
         assert_eq!(
             0,
             slab.update_sources.read().unwrap().len(),
@@ -52,7 +53,12 @@ mod test {
                 "slab should not retain a count on array"
             );
         }
-        let _ = slab.upkeep();
+        let new_buffer = slab.upkeep();
+        assert!(
+            buffer.is_invalid(),
+            "buffer capacity change should have invalidated the old buffer"
+        );
+        assert!(new_buffer.is_valid());
         assert_eq!(
             0,
             slab.update_sources.read().unwrap().len(),
@@ -89,7 +95,7 @@ mod test {
         let h6 = m.new_value(0u32);
         let h7 = m.new_value(0u32);
         log::info!("running upkeep");
-        let _ = m.upkeep();
+        let buffer = m.upkeep();
         assert!(m.recycles.read().unwrap().ranges.is_empty());
         assert_eq!(4, m.update_sources.read().unwrap().len());
         let k = m.update_k.load(Ordering::Relaxed);
@@ -101,6 +107,7 @@ mod test {
         drop(h6);
         drop(h7);
         let _ = m.upkeep();
+        assert!(buffer.is_valid(), "decreasing capacity never happens");
         assert_eq!(1, m.recycles.read().unwrap().ranges.len());
         assert!(m.update_sources.read().unwrap().is_empty());
 

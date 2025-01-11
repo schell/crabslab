@@ -1,6 +1,6 @@
 [package]
 name = "crabslab"
-version = "0.6.3"
+version = "0.6.4"
 edition = "2021"
 description = "Slab allocator focused on GPU compute (rust-gpu)"
 repository = "https://github.com/schell/crabslab"
@@ -29,4 +29,5 @@ glam = { workspace = true, features = ["std"], optional = true }
 
 [target.'cfg(target_arch = "spirv")'.dependencies]
 glam = { workspace = true, default-features = false, features = ["libm"], optional = true }
-spirv-std = "0.9.0"
+spirv-std = { git = "https://github.com/Rust-GPU/rust-gpu", rev = "562dff9176f63b318e9b34620ffacb8aa89dae9a" }
+
