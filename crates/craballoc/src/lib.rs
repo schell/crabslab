@@ -96,6 +96,13 @@ mod test {
         let h7 = m.new_value(0u32);
         log::info!("running upkeep");
         let buffer = m.upkeep();
+        assert!(
+            buffer.is_new_this_upkeep(),
+            "invocation {} != invalidation {} != creation {}",
+            buffer.invocation_k(),
+            buffer.invalidation_k(),
+            buffer.creation_k()
+        );
         assert!(m.recycles.read().unwrap().ranges.is_empty());
         assert_eq!(4, m.update_sources.read().unwrap().len());
         let k = m.update_k.load(Ordering::Relaxed);
@@ -107,6 +114,10 @@ mod test {
         drop(h6);
         drop(h7);
         let _ = m.upkeep();
+        assert!(
+            !buffer.is_new_this_upkeep(),
+            "buffer was created last upkeep"
+        );
         assert!(buffer.is_valid(), "decreasing capacity never happens");
         assert_eq!(1, m.recycles.read().unwrap().ranges.len());
         assert!(m.update_sources.read().unwrap().is_empty());

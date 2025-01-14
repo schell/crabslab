@@ -45,6 +45,8 @@ pub enum SlabAllocatorError {
 /// important to create as many values as necessary _before_ calling
 /// [`SlabAllocator::upkeep`] to avoid unnecessary invalidation.
 pub struct SlabBuffer<T> {
+    // Id of the slab's last upkeep invocation.
+    slab_upkeep_invocation_k: Arc<AtomicUsize>,
     // Id of the slab's last buffer invalidation.
     slab_invalidation_k: Arc<AtomicUsize>,
     // The slab's `slab_update_k` at the time of this buffer's creation.
@@ -58,6 +60,7 @@ pub struct SlabBuffer<T> {
 impl<T> Clone for SlabBuffer<T> {
     fn clone(&self) -> Self {
         Self {
+            slab_upkeep_invocation_k: self.slab_upkeep_invocation_k.clone(),
             slab_invalidation_k: self.slab_invalidation_k.clone(),
             buffer_creation_k: self.buffer_creation_k,
             buffer: self.buffer.clone(),
@@ -77,31 +80,59 @@ impl<T> Deref for SlabBuffer<T> {
 impl<T> SlabBuffer<T> {
     fn new(
         invalidation_k: Arc<AtomicUsize>,
+        invocation_k: Arc<AtomicUsize>,
         buffer: T,
         source_slab_buffer: Arc<RwLock<Option<SlabBuffer<T>>>>,
     ) -> Self {
         SlabBuffer {
             buffer: buffer.into(),
-            buffer_creation_k: invalidation_k.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                + 1,
+            buffer_creation_k: invalidation_k.load(std::sync::atomic::Ordering::Relaxed),
             slab_invalidation_k: invalidation_k,
+            slab_upkeep_invocation_k: invocation_k,
             source_slab_buffer,
         }
+    }
+
+    pub(crate) fn invalidation_k(&self) -> usize {
+        self.slab_invalidation_k
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn invocation_k(&self) -> usize {
+        self.slab_upkeep_invocation_k
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn creation_k(&self) -> usize {
+        self.buffer_creation_k
     }
 
     /// Determines whether this buffer has been invalidated by the slab
     /// it originated from.
     pub fn is_invalid(&self) -> bool {
-        let last_invalidation_k = self
-            .slab_invalidation_k
-            .load(std::sync::atomic::Ordering::Relaxed);
-        self.buffer_creation_k < last_invalidation_k
+        self.buffer_creation_k < self.invalidation_k()
     }
 
     /// Determines whether this buffer has been invalidated by the slab
     /// it originated from.
     pub fn is_valid(&self) -> bool {
         !self.is_invalid()
+    }
+
+    /// Returns `true` when the slab's internal buffer has been recreated, and this is that
+    /// newly created buffer.
+    ///
+    /// This will return false if [`SlabAllocator::upkeep`] has been called since the creation
+    /// of this buffer.
+    ///
+    /// Typically this function is used by structs that own the [`SlabAllocator`]. These owning
+    /// structs will call [`SlabAllocator::upkeep`] which returns a [`SlabBuffer`]. The callsite
+    /// can then call [`SlabBuffer::is_new`] to determine if any downstream resources (like bindgroups)
+    /// need to be recreated.
+    ///
+    /// This pattern keeps the owning struct from having to also store the `SlabBuffer`.
+    pub fn is_new_this_upkeep(&self) -> bool {
+        self.invocation_k() == self.buffer_creation_k
     }
 
     /// Syncronize the buffer with the slab's internal buffer.
@@ -147,7 +178,11 @@ pub struct SlabAllocator<Runtime: IsRuntime> {
     needs_expansion: Arc<AtomicBool>,
     buffer: Arc<RwLock<Option<SlabBuffer<Runtime::Buffer>>>>,
     buffer_usages: Runtime::BufferUsages,
+    // The value of invocation_k when the last buffer invalidation happened
     invalidation_k: Arc<AtomicUsize>,
+    // The next monotonically increasing upkeep invocation identifier
+    invocation_k: Arc<AtomicUsize>,
+    // The next monotonically increasing update identifier
     pub(crate) update_k: Arc<AtomicUsize>,
     pub(crate) update_sources: Arc<RwLock<FxHashMap<usize, WeakGpuRef>>>,
     update_queue: Arc<RwLock<FxHashSet<usize>>>,
@@ -166,6 +201,7 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
             buffer: self.buffer.clone(),
             buffer_usages: self.buffer_usages.clone(),
             invalidation_k: self.invalidation_k.clone(),
+            invocation_k: self.invocation_k.clone(),
             update_k: self.update_k.clone(),
             update_sources: self.update_sources.clone(),
             update_queue: self.update_queue.clone(),
@@ -201,6 +237,7 @@ impl<R: IsRuntime> SlabAllocator<R> {
             buffer: Default::default(),
             buffer_usages: default_buffer_usages,
             invalidation_k: Default::default(),
+            invocation_k: Default::default(),
         }
     }
 
@@ -317,8 +354,12 @@ impl<R: IsRuntime> SlabAllocator<R> {
             self.runtime
                 .buffer_copy(&old_buffer, &new_buffer, self.label.as_deref());
         }
-        let slab_buffer =
-            SlabBuffer::new(self.invalidation_k.clone(), new_buffer, self.buffer.clone());
+        let slab_buffer = SlabBuffer::new(
+            self.invalidation_k.clone(),
+            self.invocation_k.clone(),
+            new_buffer,
+            self.buffer.clone(),
+        );
         *guard = Some(slab_buffer.clone());
         slab_buffer
     }
@@ -412,7 +453,13 @@ impl<R: IsRuntime> SlabAllocator<R> {
     /// Returns the [`SlabBuffer`] currently used by the allocator.
     #[must_use]
     pub fn upkeep(&self) -> SlabBuffer<R::Buffer> {
+        let invocation_k = self
+            .invocation_k
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
         let buffer = if self.needs_expansion.swap(false, Ordering::Relaxed) {
+            self.invalidation_k
+                .store(invocation_k, std::sync::atomic::Ordering::Relaxed);
             self.recreate_buffer()
         } else {
             // UNWRAP: Safe because we know it exists or else it would need expansion
