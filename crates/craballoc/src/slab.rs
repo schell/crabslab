@@ -43,13 +43,16 @@ pub enum SlabAllocatorError {
 ///
 /// Invalidation happens when the slab resizes. For this reason it is
 /// important to create as many values as necessary _before_ calling
-/// [`SlabAllocator::get_updated_buffer`] to avoid unnecessary invalidation.
+/// [`SlabAllocator::upkeep`] to avoid unnecessary invalidation.
 pub struct SlabBuffer<T> {
     // Id of the slab's last buffer invalidation.
     slab_invalidation_k: Arc<AtomicUsize>,
     // The slab's `slab_update_k` at the time of this buffer's creation.
     buffer_creation_k: usize,
+    // The buffer created at `buffer_creation_k`
     buffer: Arc<T>,
+    // The buffer the source slab is currently working with
+    source_slab_buffer: Arc<RwLock<Option<SlabBuffer<T>>>>,
 }
 
 impl<T> Clone for SlabBuffer<T> {
@@ -58,6 +61,7 @@ impl<T> Clone for SlabBuffer<T> {
             slab_invalidation_k: self.slab_invalidation_k.clone(),
             buffer_creation_k: self.buffer_creation_k,
             buffer: self.buffer.clone(),
+            source_slab_buffer: self.source_slab_buffer.clone(),
         }
     }
 }
@@ -71,12 +75,17 @@ impl<T> Deref for SlabBuffer<T> {
 }
 
 impl<T> SlabBuffer<T> {
-    fn new(invalidation_k: Arc<AtomicUsize>, buffer: T) -> Self {
+    fn new(
+        invalidation_k: Arc<AtomicUsize>,
+        buffer: T,
+        source_slab_buffer: Arc<RwLock<Option<SlabBuffer<T>>>>,
+    ) -> Self {
         SlabBuffer {
             buffer: buffer.into(),
             buffer_creation_k: invalidation_k.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                 + 1,
             slab_invalidation_k: invalidation_k,
+            source_slab_buffer,
         }
     }
 
@@ -93,6 +102,32 @@ impl<T> SlabBuffer<T> {
     /// it originated from.
     pub fn is_valid(&self) -> bool {
         !self.is_invalid()
+    }
+
+    /// Syncronize the buffer with the slab's internal buffer.
+    ///
+    /// This checks to ensure the buffer contained is the one the slab is working with,
+    /// and updates it if the slab is working with a newer buffer.
+    ///
+    /// Returns `true` if the buffer was updated.
+    /// Returns `false` if the buffer remains the same.
+    ///
+    /// Use the result of this function to invalidate any bind groups or other downstream
+    /// resources.
+    pub fn synchronize(&mut self) -> bool {
+        if self.is_invalid() {
+            // UNWRAP: Safe because it is an invariant of the system. Once the `SlabBuffer`
+            // is created, source_slab_buffer will always be Some.
+            let updated_buffer = {
+                let guard = self.source_slab_buffer.read().unwrap();
+                guard.as_ref().unwrap().clone()
+            };
+            debug_assert!(updated_buffer.is_valid());
+            *self = updated_buffer;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -282,7 +317,8 @@ impl<R: IsRuntime> SlabAllocator<R> {
             self.runtime
                 .buffer_copy(&old_buffer, &new_buffer, self.label.as_deref());
         }
-        let slab_buffer = SlabBuffer::new(self.invalidation_k.clone(), new_buffer);
+        let slab_buffer =
+            SlabBuffer::new(self.invalidation_k.clone(), new_buffer, self.buffer.clone());
         *guard = Some(slab_buffer.clone());
         slab_buffer
     }
