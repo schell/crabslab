@@ -110,7 +110,7 @@ impl<T> SlabBuffer<T> {
     /// Determines whether this buffer has been invalidated by the slab
     /// it originated from.
     pub fn is_invalid(&self) -> bool {
-        self.buffer_creation_k < self.invalidation_k()
+        self.creation_k() < self.invalidation_k()
     }
 
     /// Determines whether this buffer has been invalidated by the slab
@@ -145,6 +145,43 @@ impl<T> SlabBuffer<T> {
     ///
     /// Use the result of this function to invalidate any bind groups or other downstream
     /// resources.
+    ///
+    /// ## Note
+    /// Be cautious when using this function with multiple buffers to invalidate downstream
+    /// resources. Keep in mind that using the
+    /// [lazy boolean operators](https://doc.rust-lang.org/reference/expressions/operator-expr.html#lazy-boolean-operators)
+    /// might not have the effect you are expecting!
+    ///
+    /// For example:
+    ///
+    /// ```rust,no_run
+    /// use craballoc::prelude::*;
+    ///
+    /// let buffer_a: SlabBuffer<wgpu::Buffer> = todo!();
+    /// let buffer_b: SlabBuffer<wgpu::Buffer> = todo!();
+    /// let buffer_c: SlabBuffer<wgpu::Buffer> = todo!();
+    ///
+    /// let should_invalidate = buffer_a.synchronize() || buffer_b.synchronize() || buffer_c.synchronize();
+    /// ```
+    ///
+    /// If `buffer_a` is invalid, neither `buffer_b` nor `buffer_c` will be synchronized, because
+    /// `||` is lazy in its parameter evaluation.
+    ///
+    /// Instead, we should write the following:
+    ///
+    /// ```rust,no_run`
+    /// use craballoc::prelude::*;
+    ///
+    /// let buffer_a: SlabBuffer<wgpu::Buffer> = todo!();
+    /// let buffer_b: SlabBuffer<wgpu::Buffer> = todo!();
+    /// let buffer_c: SlabBuffer<wgpu::Buffer> = todo!();
+    ///
+    /// let buffer_a_invalid = buffer_a.synchronize();
+    /// let buffer_b_invalid = buffer_b.synchronize();
+    /// let buffer_c_invalid = buffer_c.synchronize();
+    ///
+    /// let should_invalidate = buffer_a_invalid || buffer_b_invalid || buffer_c_invalid;
+    /// ```
     pub fn synchronize(&mut self) -> bool {
         if self.is_invalid() {
             // UNWRAP: Safe because it is an invariant of the system. Once the `SlabBuffer`
@@ -451,7 +488,6 @@ impl<R: IsRuntime> SlabAllocator<R> {
     /// Perform upkeep on the slab, commiting changes to the GPU.
     ///
     /// Returns the [`SlabBuffer`] currently used by the allocator.
-    #[must_use]
     pub fn upkeep(&self) -> SlabBuffer<R::Buffer> {
         let invocation_k = self
             .invocation_k
