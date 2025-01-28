@@ -103,14 +103,18 @@ impl<T> SlabBuffer<T> {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub(crate) fn creation_k(&self) -> usize {
+    /// Returns the timestamp at which this buffer was created.
+    ///
+    /// The returned timestamp is not a unix timestamp. It is a
+    /// monotonically increasing count of buffer invalidations.
+    pub fn creation_time(&self) -> usize {
         self.buffer_creation_k
     }
 
     /// Determines whether this buffer has been invalidated by the slab
     /// it originated from.
     pub fn is_invalid(&self) -> bool {
-        self.creation_k() < self.invalidation_k()
+        self.creation_time() < self.invalidation_k()
     }
 
     /// Determines whether this buffer has been invalidated by the slab
