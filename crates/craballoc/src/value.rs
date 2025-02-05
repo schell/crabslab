@@ -141,6 +141,49 @@ impl<T> WeakHybrid<T> {
     }
 }
 
+/// RAII structure used to update a `[Hybrid<T>]`.
+///
+/// `HybridWriteGuard<T>` dereferences to `T`.
+/// Modifying the dereferenced `T` will queue an update once the guard is dropped.
+///
+/// The following are equivalent:
+///
+/// ### Queue an update using a guard
+///
+/// ```rust
+/// use craballoc::prelude::*;
+///
+/// let slab = SlabAllocator::new(CpuRuntime, ());
+/// let value = slab.new_value(42u32);
+///
+/// {
+///     let mut guard = value.lock();
+///     *guard += 8;
+/// }
+///
+/// // At this point the update has been queued, and synchronization can occur.
+/// slab.commit();
+///
+/// // Confirm using the raw slab.
+/// assert_eq!(&[50], slab.get_buffer().unwrap().as_vec().as_slice());
+/// ```
+///
+/// ### Queue an update using `modify`
+///
+/// ```rust
+/// use craballoc::prelude::*;
+///
+/// let slab = SlabAllocator::new(CpuRuntime, ());
+/// let value = slab.new_value(42u32);
+///
+/// value.modify(|u| *u += 8);
+///
+/// // At this point the update has been queued, and synchronization can occur.
+/// slab.commit();
+///
+/// // Confirm using the raw slab.
+/// assert_eq!(&[50], slab.get_buffer().unwrap().as_vec().as_slice());
+/// ```
 pub struct HybridWriteGuard<'a, T: SlabItem + Clone + Send + Sync + 'static> {
     lock: RwLockWriteGuard<'a, T>,
     hybrid: &'a Hybrid<T>,
