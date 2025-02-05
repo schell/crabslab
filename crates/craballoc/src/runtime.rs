@@ -113,6 +113,12 @@ pub struct VecSlab {
     inner: Mutex<Vec<u32>>,
 }
 
+impl VecSlab {
+    pub fn as_vec(&self) -> impl Deref<Target = Vec<u32>> + '_ {
+        self.inner.lock().unwrap()
+    }
+}
+
 impl IsRuntime for CpuRuntime {
     type Buffer = VecSlab;
     type BufferUsages = ();

@@ -39,7 +39,7 @@ mod test {
                 "slab should not retain a count on value"
             );
         }
-        let buffer = slab.upkeep();
+        let buffer = slab.commit();
         assert_eq!(
             0,
             slab.update_sources.read().unwrap().len(),
@@ -53,7 +53,7 @@ mod test {
                 "slab should not retain a count on array"
             );
         }
-        let new_buffer = slab.upkeep();
+        let new_buffer = slab.commit();
         assert!(
             buffer.is_invalid(),
             "buffer capacity change should have invalidated the old buffer"
@@ -94,14 +94,14 @@ mod test {
         let h5 = m.new_value(0u32);
         let h6 = m.new_value(0u32);
         let h7 = m.new_value(0u32);
-        log::info!("running upkeep");
-        let buffer = m.upkeep();
+        log::info!("running commit");
+        let buffer = m.commit();
         assert!(
-            buffer.is_new_this_upkeep(),
+            buffer.is_new_this_commit(),
             "invocation {} != invalidation {} != creation {}",
             buffer.invocation_k(),
             buffer.invalidation_k(),
-            buffer.creation_k()
+            buffer.creation_time()
         );
         assert!(m.recycles.read().unwrap().ranges.is_empty());
         assert_eq!(4, m.update_sources.read().unwrap().len());
@@ -113,10 +113,10 @@ mod test {
         drop(h5);
         drop(h6);
         drop(h7);
-        let _ = m.upkeep();
+        let _ = m.commit();
         assert!(
-            !buffer.is_new_this_upkeep(),
-            "buffer was created last upkeep"
+            !buffer.is_new_this_commit(),
+            "buffer was created last commit"
         );
         assert!(buffer.is_valid(), "decreasing capacity never happens");
         assert_eq!(1, m.recycles.read().unwrap().ranges.len());
@@ -138,14 +138,14 @@ mod test {
         drop(h8);
         drop(h4);
         drop(h6);
-        let _ = m.upkeep();
+        let _ = m.commit();
         assert_eq!(3, m.recycles.read().unwrap().ranges.len());
         assert_eq!(2, m.update_sources.read().unwrap().len());
         assert_eq!(9, m.update_k.load(Ordering::Relaxed));
 
         drop(h7);
         drop(h5);
-        let _ = m.upkeep();
+        let _ = m.commit();
         m.defrag();
         assert_eq!(
             1,
@@ -153,5 +153,37 @@ mod test {
             "ranges: {:#?}",
             m.recycles.read().unwrap().ranges
         );
+    }
+
+    #[test]
+    fn hybrid_write_guard() {
+        let m = SlabAllocator::new(CpuRuntime, ());
+        let h4 = m.new_value(0u32);
+        assert!(
+            m.get_buffer().is_none(),
+            "buffer should not be created until after first `commit`"
+        );
+        m.commit();
+
+        {
+            let mut guard = h4.lock();
+            assert_eq!(0, *guard);
+            assert!(!guard.mutated, "guard should not mutate with deref");
+
+            *guard += 10;
+            assert_eq!(10, *guard);
+            assert!(guard.mutated, "guard should mutate with deref mut");
+            let buffer = m.get_buffer().unwrap();
+            let v = buffer.as_vec();
+            assert_eq!(
+                &[0],
+                v.as_slice(),
+                "underlying buffer should not be written until after `commit`",
+            );
+        }
+        m.commit();
+
+        let buffer = m.get_buffer().unwrap();
+        assert_eq!(&[10], buffer.as_vec().as_slice());
     }
 }

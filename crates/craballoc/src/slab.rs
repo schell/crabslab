@@ -103,7 +103,7 @@ impl<T> SlabBuffer<T> {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Returns the timestamp at which this buffer was created.
+    /// Returns the timestamp at which the internal buffer was created.
     ///
     /// The returned timestamp is not a unix timestamp. It is a
     /// monotonically increasing count of buffer invalidations.
@@ -135,13 +135,18 @@ impl<T> SlabBuffer<T> {
     /// need to be recreated.
     ///
     /// This pattern keeps the owning struct from having to also store the `SlabBuffer`.
-    pub fn is_new_this_upkeep(&self) -> bool {
+    pub fn is_new_this_commit(&self) -> bool {
         self.invocation_k() == self.buffer_creation_k
+    }
+
+    #[deprecated(since = "0.1.5", note = "please use `is_new_this_commit` instead")]
+    pub fn is_new_this_upkeep(&self) -> bool {
+        self.is_new_this_commit()
     }
 
     /// Syncronize the buffer with the slab's internal buffer.
     ///
-    /// This checks to ensure the buffer contained is the one the slab is working with,
+    /// This checks to ensure that the internal buffer is the one the slab is working with,
     /// and updates it if the slab is working with a newer buffer.
     ///
     /// Returns `true` if the buffer was updated.
@@ -186,7 +191,7 @@ impl<T> SlabBuffer<T> {
     ///
     /// let should_invalidate = buffer_a_invalid || buffer_b_invalid || buffer_c_invalid;
     /// ```
-    pub fn synchronize(&mut self) -> bool {
+    pub fn update_if_invalid(&mut self) -> bool {
         if self.is_invalid() {
             // UNWRAP: Safe because it is an invariant of the system. Once the `SlabBuffer`
             // is created, source_slab_buffer will always be Some.
@@ -200,6 +205,11 @@ impl<T> SlabBuffer<T> {
         } else {
             false
         }
+    }
+
+    #[deprecated(since = "0.1.5", note = "please use `update_if_invalid` instead")]
+    pub fn synchronize(&mut self) -> bool {
+        self.update_if_invalid()
     }
 }
 
@@ -489,10 +499,15 @@ impl<R: IsRuntime> SlabAllocator<R> {
         writes
     }
 
-    /// Perform upkeep on the slab, commiting changes to the GPU.
+    /// Perform upkeep on the slab, commiting changes to the internal buffer.
     ///
-    /// Returns the [`SlabBuffer`] currently used by the allocator.
-    pub fn upkeep(&self) -> SlabBuffer<R::Buffer> {
+    /// Changes made to [`Hybrid`] and [`Gpu`] values created by this slab are not committed
+    /// until this function has been called.
+    ///
+    /// The internal buffer is not created until the first time this function is called.
+    ///
+    /// Returns a [`SlabBuffer`] wrapping the internal buffer that is currently in use by the allocator.
+    pub fn commit(&self) -> SlabBuffer<R::Buffer> {
         let invocation_k = self
             .invocation_k
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -511,6 +526,11 @@ impl<R: IsRuntime> SlabAllocator<R> {
                 .buffer_write(writes.ranges.into_iter(), &buffer);
         }
         buffer
+    }
+
+    #[deprecated(since = "0.1.5", note = "please use `commit` instead")]
+    pub fn upkeep(&self) -> SlabBuffer<R::Buffer> {
+        self.commit()
     }
 
     /// Defragments the internal "recycle" buffer.

@@ -1,6 +1,9 @@
 //! Allocated values.
 
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::{
+    ops::{Deref, DerefMut},
+    sync::{Arc, Mutex, RwLock, RwLockWriteGuard, Weak},
+};
 
 use crabslab::{Array, Id, Slab, SlabItem};
 
@@ -138,6 +141,46 @@ impl<T> WeakHybrid<T> {
     }
 }
 
+pub struct HybridWriteGuard<'a, T: SlabItem + Clone + Send + Sync + 'static> {
+    lock: RwLockWriteGuard<'a, T>,
+    hybrid: &'a Hybrid<T>,
+    pub(crate) mutated: bool,
+}
+
+impl<T: SlabItem + Clone + Send + Sync + 'static> Deref for HybridWriteGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.lock.deref()
+    }
+}
+
+impl<T: SlabItem + Clone + Send + Sync + 'static> DerefMut for HybridWriteGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.mutated = true;
+        self.lock.deref_mut()
+    }
+}
+
+impl<T: SlabItem + Clone + Send + Sync + 'static> Drop for HybridWriteGuard<'_, T> {
+    fn drop(&mut self) {
+        if self.mutated {
+            let value: T = self.lock.clone();
+            self.hybrid.gpu_value.set(value);
+        }
+    }
+}
+
+impl<'a, T: SlabItem + Clone + Send + Sync + 'static> HybridWriteGuard<'a, T> {
+    pub fn new(hybrid: &'a Hybrid<T>) -> Self {
+        Self {
+            lock: hybrid.cpu_value.write().unwrap(),
+            hybrid,
+            mutated: false,
+        }
+    }
+}
+
 /// A "hybrid" type that lives on the CPU and the GPU.
 ///
 /// Updates are syncronized to the GPU at the behest of the
@@ -208,6 +251,11 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
     /// only the GPU resources.
     pub fn into_gpu_only(self) -> Gpu<T> {
         self.gpu_value
+    }
+
+    /// Acquire a write lock on this value in order to mutate it.
+    pub fn lock(&self) -> HybridWriteGuard<'_, T> {
+        HybridWriteGuard::new(self)
     }
 }
 

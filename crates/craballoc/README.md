@@ -4,7 +4,8 @@
 
 ## What
 
-`craballoc` is a slab allocator built on top of [`crabslab`](github.com/schell/crabslab).
+`craballoc` is a slab allocator built on top of [`crabslab`](github.com/schell/crabslab)
+that provides RAII primitives for synchronizing values across CPU and GPU code.
 
 ## But Why?
 

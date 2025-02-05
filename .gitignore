@@ -7,3 +7,4 @@ Cargo.lock
 flamegraph.svg
 .#*
 .DS_Store
+.aider*
