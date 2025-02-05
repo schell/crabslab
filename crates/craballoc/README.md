@@ -33,7 +33,7 @@ To modify values, use [`Hybrid::modify`].
 
 To forget the CPU side of values, use [`Hybrid::into_gpu_only`].
 
-Finally, synchronize the slab once per frame (or more, or less) using [`SlabAllocator::get_updated_buffer`].
+Finally, synchronize the slab once per frame (or more, or less) using [`SlabAllocator::commit`].
 
 On the GPU (using a shader written with [`spirv-std`](https://crates.io/crates/spirv-std)) use 
 `crabslab` to read values in a no_std context. 

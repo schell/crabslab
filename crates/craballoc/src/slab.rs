@@ -21,7 +21,7 @@ mod wgpu_slab;
 #[snafu(visibility(pub(crate)))]
 pub enum SlabAllocatorError {
     #[snafu(display(
-        "Slab has no internal buffer. Please call SlabAllocator::upkeep or \
+        "Slab has no internal buffer. Please call SlabAllocator::commit or \
          SlabAllocator::get_updated_buffer first."
     ))]
     NoInternalBuffer,
@@ -43,10 +43,10 @@ pub enum SlabAllocatorError {
 ///
 /// Invalidation happens when the slab resizes. For this reason it is
 /// important to create as many values as necessary _before_ calling
-/// [`SlabAllocator::upkeep`] to avoid unnecessary invalidation.
+/// [`SlabAllocator::commit`] to avoid unnecessary invalidation.
 pub struct SlabBuffer<T> {
-    // Id of the slab's last upkeep invocation.
-    slab_upkeep_invocation_k: Arc<AtomicUsize>,
+    // Id of the slab's last `commit` invocation.
+    slab_commit_invocation_k: Arc<AtomicUsize>,
     // Id of the slab's last buffer invalidation.
     slab_invalidation_k: Arc<AtomicUsize>,
     // The slab's `slab_update_k` at the time of this buffer's creation.
@@ -60,7 +60,7 @@ pub struct SlabBuffer<T> {
 impl<T> Clone for SlabBuffer<T> {
     fn clone(&self) -> Self {
         Self {
-            slab_upkeep_invocation_k: self.slab_upkeep_invocation_k.clone(),
+            slab_commit_invocation_k: self.slab_commit_invocation_k.clone(),
             slab_invalidation_k: self.slab_invalidation_k.clone(),
             buffer_creation_k: self.buffer_creation_k,
             buffer: self.buffer.clone(),
@@ -88,7 +88,7 @@ impl<T> SlabBuffer<T> {
             buffer: buffer.into(),
             buffer_creation_k: invalidation_k.load(std::sync::atomic::Ordering::Relaxed),
             slab_invalidation_k: invalidation_k,
-            slab_upkeep_invocation_k: invocation_k,
+            slab_commit_invocation_k: invocation_k,
             source_slab_buffer,
         }
     }
@@ -99,7 +99,7 @@ impl<T> SlabBuffer<T> {
     }
 
     pub(crate) fn invocation_k(&self) -> usize {
-        self.slab_upkeep_invocation_k
+        self.slab_commit_invocation_k
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -126,11 +126,11 @@ impl<T> SlabBuffer<T> {
     /// Returns `true` when the slab's internal buffer has been recreated, and this is that
     /// newly created buffer.
     ///
-    /// This will return false if [`SlabAllocator::upkeep`] has been called since the creation
+    /// This will return false if [`SlabAllocator::commit`] has been called since the creation
     /// of this buffer.
     ///
     /// Typically this function is used by structs that own the [`SlabAllocator`]. These owning
-    /// structs will call [`SlabAllocator::upkeep`] which returns a [`SlabBuffer`]. The callsite
+    /// structs will call [`SlabAllocator::commit`] which returns a [`SlabBuffer`]. The callsite
     /// can then call [`SlabBuffer::is_new`] to determine if any downstream resources (like bindgroups)
     /// need to be recreated.
     ///
@@ -170,7 +170,9 @@ impl<T> SlabBuffer<T> {
     /// let buffer_b: SlabBuffer<wgpu::Buffer> = todo!();
     /// let buffer_c: SlabBuffer<wgpu::Buffer> = todo!();
     ///
-    /// let should_invalidate = buffer_a.synchronize() || buffer_b.synchronize() || buffer_c.synchronize();
+    /// let should_invalidate = buffer_a.update_if_invalid()
+    ///     || buffer_b.update_if_invalid()
+    ///     || buffer_c.update_if_invalid();
     /// ```
     ///
     /// If `buffer_a` is invalid, neither `buffer_b` nor `buffer_c` will be synchronized, because
@@ -178,16 +180,16 @@ impl<T> SlabBuffer<T> {
     ///
     /// Instead, we should write the following:
     ///
-    /// ```rust,no_run`
+    /// ```rust,no_run
     /// use craballoc::prelude::*;
     ///
     /// let buffer_a: SlabBuffer<wgpu::Buffer> = todo!();
     /// let buffer_b: SlabBuffer<wgpu::Buffer> = todo!();
     /// let buffer_c: SlabBuffer<wgpu::Buffer> = todo!();
     ///
-    /// let buffer_a_invalid = buffer_a.synchronize();
-    /// let buffer_b_invalid = buffer_b.synchronize();
-    /// let buffer_c_invalid = buffer_c.synchronize();
+    /// let buffer_a_invalid = buffer_a.update_if_invalid();
+    /// let buffer_b_invalid = buffer_b.update_if_invalid();
+    /// let buffer_c_invalid = buffer_c.update_if_invalid();
     ///
     /// let should_invalidate = buffer_a_invalid || buffer_b_invalid || buffer_c_invalid;
     /// ```
@@ -218,7 +220,7 @@ impl<T> SlabBuffer<T> {
 /// Create a new instance using [`SlabAllocator::new`].
 ///
 /// Upon creation you will need to call [`SlabAllocator::get_updated_buffer`] or
-/// [`SlabAllocator::upkeep`] at least once before any data is written to the
+/// [`SlabAllocator::commit`] at least once before any data is written to the
 /// internal buffer.
 pub struct SlabAllocator<Runtime: IsRuntime> {
     pub(crate) notifier: (async_channel::Sender<usize>, async_channel::Receiver<usize>),
@@ -231,7 +233,7 @@ pub struct SlabAllocator<Runtime: IsRuntime> {
     buffer_usages: Runtime::BufferUsages,
     // The value of invocation_k when the last buffer invalidation happened
     invalidation_k: Arc<AtomicUsize>,
-    // The next monotonically increasing upkeep invocation identifier
+    // The next monotonically increasing commit invocation identifier
     invocation_k: Arc<AtomicUsize>,
     // The next monotonically increasing update identifier
     pub(crate) update_k: Arc<AtomicUsize>,
