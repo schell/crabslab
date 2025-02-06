@@ -536,3 +536,62 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
         self.gpu_value
     }
 }
+
+/// An abstraction over the container type of a hybrid value of `T`.
+///
+/// For example, the container type could be `Hybrid<T>`, `WeakHybrid<T>`,
+/// `Gpu<T>` or `WeakGpu<T>`.
+///
+/// This is essentially a way around Rust not having higher-kinded data types.
+///
+/// Example usage:
+/// ```rust
+/// use craballoc::prelude::*;
+///
+/// #[derive(Clone, Debug)]
+/// pub enum SomeDetails<Ct: IsContainer = HybridContainer> {
+///     A(Ct::Container<usize>),
+///     B(Ct::Container<u32>),
+/// }
+///
+/// impl<Ct: IsContainer> SomeDetails<Ct> {
+///     pub fn as_a(&self) -> Option<&Ct::Container<usize>> {
+///         if let LightDetails::A(v) = self {
+///             Some(v)
+///         } else {
+///             None
+///         }
+///     }
+/// }
+/// ```
+pub trait IsContainer {
+    type Container<T>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HybridContainer;
+
+impl IsContainer for HybridContainer {
+    type Container<T> = Hybrid<T>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WeakContainer;
+
+impl IsContainer for WeakContainer {
+    type Container<T> = WeakHybrid<T>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GpuContainer;
+
+impl IsContainer for GpuContainer {
+    type Container<T> = Gpu<T>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WeakGpuContainer;
+
+impl IsContainer for WeakGpuContainer {
+    type Container<T> = WeakGpu<T>;
+}
