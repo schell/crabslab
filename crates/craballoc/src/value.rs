@@ -90,6 +90,11 @@ impl<T> WeakGpu<T> {
             update: self.update.upgrade()?,
         })
     }
+
+    /// A unique identifier.
+    pub fn notifier_index(&self) -> usize {
+        self.notifier_index
+    }
 }
 
 /// A hybrid value that holds a non-owning reference
@@ -138,6 +143,11 @@ impl<T> WeakHybrid<T> {
 
     pub fn weak_gpu(&self) -> &WeakGpu<T> {
         &self.weak_gpu
+    }
+
+    /// A unique identifier.
+    pub fn notifier_index(&self) -> usize {
+        self.weak_gpu.notifier_index
     }
 }
 
@@ -300,6 +310,11 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
     pub fn lock(&self) -> HybridWriteGuard<'_, T> {
         HybridWriteGuard::new(self)
     }
+
+    /// A unique identifier.
+    pub fn notifier_index(&self) -> usize {
+        self.gpu_value.notifier_index
+    }
 }
 
 /// A type that lives only on the GPU.
@@ -450,6 +465,11 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
         // UNWRAP: safe because it's unbounded
         self.notifier.try_send(self.notifier_index).unwrap();
     }
+
+    /// A unique identifier.
+    pub fn notifier_index(&self) -> usize {
+        self.notifier_index
+    }
 }
 
 /// A "hybrid" array type that lives on the CPU and the GPU.
@@ -534,6 +554,11 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
 
     pub fn into_gpu_only(self) -> GpuArray<T> {
         self.gpu_value
+    }
+
+    /// A unique identifier.
+    pub fn notifier_index(&self) -> usize {
+        self.gpu_value.notifier_index
     }
 }
 
