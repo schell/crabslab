@@ -30,13 +30,24 @@ mod test {
     #[test]
     fn mngr_updates_count_sanity() {
         let slab = SlabAllocator::new(CpuRuntime, ());
-        assert!(slab.get_buffer().is_none());
+        assert!(
+            slab.get_buffer().is_none(),
+            "should not have a buffer until after 'commit'"
+        );
+        assert!(
+            !slab.has_queued_updates(),
+            "should not have any queued updates"
+        );
         {
             let value = slab.new_value(666u32);
             assert_eq!(
                 1,
                 value.ref_count(),
                 "slab should not retain a count on value"
+            );
+            assert!(
+                slab.has_queued_updates(),
+                "should have queued updates after new value"
             );
         }
         let buffer = slab.commit();

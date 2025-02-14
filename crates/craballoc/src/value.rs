@@ -374,7 +374,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
                 es
             },
         }];
-        // UNWRAP: safe because it's unbound
+        // UNWRAP: safe because it's unbounded
         self.notify.try_send(self.notifier_index).unwrap();
     }
 
@@ -581,7 +581,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
 ///
 /// impl<Ct: IsContainer> SomeDetails<Ct> {
 ///     pub fn as_a(&self) -> Option<&Ct::Container<usize>> {
-///         if let LightDetails::A(v) = self {
+///         if let SomeDetails::A(v) = self {
 ///             Some(v)
 ///         } else {
 ///             None

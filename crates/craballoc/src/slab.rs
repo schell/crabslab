@@ -237,8 +237,11 @@ pub struct SlabAllocator<Runtime: IsRuntime> {
     invocation_k: Arc<AtomicUsize>,
     // The next monotonically increasing update identifier
     pub(crate) update_k: Arc<AtomicUsize>,
+    // Weak references to all values that can write updates into this slab
     pub(crate) update_sources: Arc<RwLock<FxHashMap<usize, WeakGpuRef>>>,
+    // Set of ids of the update sources that have updates queued
     update_queue: Arc<RwLock<FxHashSet<usize>>>,
+    // Recycled memory ranges
     pub(crate) recycles: Arc<RwLock<RangeManager<Range>>>,
 }
 
@@ -499,6 +502,12 @@ impl<R: IsRuntime> SlabAllocator<R> {
         }
 
         writes
+    }
+
+    /// Returns whether any update sources, most likely from [`Hybrid`] or [`Gpu`] values,
+    /// have queued updates waiting to be synchronized.
+    pub fn has_queued_updates(&self) -> bool {
+        !self.notifier.1.is_empty() || !self.update_queue.read().unwrap().is_empty()
     }
 
     /// Perform upkeep on the slab, commiting changes to the internal buffer.
