@@ -245,6 +245,12 @@ pub struct Hybrid<T> {
     pub(crate) gpu_value: Gpu<T>,
 }
 
+impl<T> AsRef<Hybrid<T>> for Hybrid<T> {
+    fn as_ref(&self) -> &Hybrid<T> {
+        self
+    }
+}
+
 impl<T: core::fmt::Debug> core::fmt::Debug for Hybrid<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct(&format!("Hybrid<{}>", std::any::type_name::<T>()))
