@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, RwLock, RwLockWriteGuard, Weak},
 };
 
-use crabslab::{Array, Id, Slab, SlabItem};
+use crabslab::{Array, Id, IsContainer, Slab, SlabItem};
 
 use crate::{
     runtime::{IsRuntime, SlabUpdate},
@@ -53,7 +53,7 @@ impl WeakGpuRef {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, IsContainer)]
 pub struct WeakGpu<T> {
     pub(crate) id: Id<T>,
     pub(crate) notifier_index: usize,
@@ -99,7 +99,8 @@ impl<T> WeakGpu<T> {
 
 /// A hybrid value that holds a non-owning reference
 /// to the underlying data.
-#[derive(Debug)]
+#[derive(Debug, IsContainer)]
+#[proxy(WeakContainer)]
 pub struct WeakHybrid<T> {
     pub(crate) weak_cpu: Weak<RwLock<T>>,
     pub(crate) weak_gpu: WeakGpu<T>,
@@ -240,6 +241,7 @@ impl<'a, T: SlabItem + Clone + Send + Sync + 'static> HybridWriteGuard<'a, T> {
 /// `SlabAllocator<T>` that created this value.
 ///
 /// Clones of a hybrid all point to the same CPU and GPU data.
+#[derive(IsContainer)]
 pub struct Hybrid<T> {
     pub(crate) cpu_value: Arc<RwLock<T>>,
     pub(crate) gpu_value: Gpu<T>,
@@ -327,6 +329,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
 ///
 /// Updates are synchronized to the GPU at the behest of the [`SlabAllocator`]
 /// that created this value.
+#[derive(Debug, IsContainer)]
 pub struct Gpu<T> {
     pub(crate) id: Id<T>,
     pub(crate) notifier_index: usize,
@@ -396,7 +399,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
 ///
 /// Updates are syncronized to the GPU at the behest of the
 /// [`SlabAllocator`] that created this array.
-#[derive(Debug)]
+#[derive(Debug, IsContainer)]
 pub struct GpuArray<T> {
     array: Array<T>,
     notifier_index: usize,
@@ -484,6 +487,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
 ///
 /// Updates are syncronized to the GPU at the behest of the
 /// [`SlabAllocator`] that created this array.
+#[derive(IsContainer)]
 pub struct HybridArray<T> {
     cpu_value: Arc<RwLock<Vec<T>>>,
     gpu_value: GpuArray<T>,
@@ -573,7 +577,8 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
 /// For example, the container type could be `Hybrid<T>`, `WeakHybrid<T>`,
 /// `Gpu<T>` or `WeakGpu<T>`.
 ///
-/// This is essentially a way around Rust not having higher-kinded data types.
+/// This is a way around Rust not having higher-kinded data types.
+/// It is used to make the container type generic while fixing the element type.
 ///
 /// Example usage:
 /// ```rust
@@ -597,32 +602,4 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
 /// ```
 pub trait IsContainer {
     type Container<T>;
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct HybridContainer;
-
-impl IsContainer for HybridContainer {
-    type Container<T> = Hybrid<T>;
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct WeakContainer;
-
-impl IsContainer for WeakContainer {
-    type Container<T> = WeakHybrid<T>;
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct GpuContainer;
-
-impl IsContainer for GpuContainer {
-    type Container<T> = Gpu<T>;
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct WeakGpuContainer;
-
-impl IsContainer for WeakGpuContainer {
-    type Container<T> = WeakGpu<T>;
 }

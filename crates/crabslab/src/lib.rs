@@ -14,7 +14,7 @@ pub use array::*;
 pub use id::*;
 pub use slab::*;
 
-pub use crabslab_derive::SlabItem;
+pub use crabslab_derive::{IsContainer, SlabItem};
 
 #[cfg(not(target_arch = "spirv"))]
 /// Proxy for `u32::saturating_sub`.
