@@ -9,7 +9,7 @@ use crabslab::{Array, Id, IsContainer, Slab, SlabItem};
 
 use crate::{
     runtime::{IsRuntime, SlabUpdate},
-    slab::SlabAllocator,
+    slab::{SlabAllocator, SourceId},
 };
 
 pub struct WeakGpuRef {
@@ -56,8 +56,8 @@ impl WeakGpuRef {
 #[derive(Debug, IsContainer)]
 pub struct WeakGpu<T> {
     pub(crate) id: Id<T>,
-    pub(crate) notifier_index: usize,
-    pub(crate) notify: async_channel::Sender<usize>,
+    pub(crate) notifier_index: SourceId,
+    pub(crate) notify: async_channel::Sender<SourceId>,
     pub(crate) update: Weak<Mutex<Vec<SlabUpdate>>>,
 }
 
@@ -92,7 +92,7 @@ impl<T> WeakGpu<T> {
     }
 
     /// A unique identifier.
-    pub fn notifier_index(&self) -> usize {
+    pub fn notifier_index(&self) -> SourceId {
         self.notifier_index
     }
 }
@@ -147,7 +147,7 @@ impl<T> WeakHybrid<T> {
     }
 
     /// A unique identifier.
-    pub fn notifier_index(&self) -> usize {
+    pub fn notifier_index(&self) -> SourceId {
         self.weak_gpu.notifier_index
     }
 }
@@ -164,7 +164,7 @@ impl<T> WeakHybrid<T> {
 /// ```rust
 /// use craballoc::prelude::*;
 ///
-/// let slab = SlabAllocator::new(CpuRuntime, ());
+/// let slab = SlabAllocator::new(CpuRuntime, "test-slab", ());
 /// let value = slab.new_value(42u32);
 ///
 /// {
@@ -184,7 +184,7 @@ impl<T> WeakHybrid<T> {
 /// ```rust
 /// use craballoc::prelude::*;
 ///
-/// let slab = SlabAllocator::new(CpuRuntime, ());
+/// let slab = SlabAllocator::new(CpuRuntime, "test-slab", ());
 /// let value = slab.new_value(42u32);
 ///
 /// value.modify(|u| *u += 8);
@@ -320,7 +320,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
     }
 
     /// A unique identifier.
-    pub fn notifier_index(&self) -> usize {
+    pub fn notifier_index(&self) -> SourceId {
         self.gpu_value.notifier_index
     }
 }
@@ -332,8 +332,8 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
 #[derive(Debug, IsContainer)]
 pub struct Gpu<T> {
     pub(crate) id: Id<T>,
-    pub(crate) notifier_index: usize,
-    pub(crate) notify: async_channel::Sender<usize>,
+    pub(crate) notifier_index: SourceId,
+    pub(crate) notify: async_channel::Sender<SourceId>,
     pub(crate) update: Arc<Mutex<Vec<SlabUpdate>>>,
 }
 
@@ -357,7 +357,10 @@ impl<T> Clone for Gpu<T> {
 impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
     pub fn new(mngr: &SlabAllocator<impl IsRuntime>, value: T) -> Self {
         let id = mngr.allocate::<T>();
-        let notifier_index = mngr.next_update_k();
+        let notifier_index = SourceId {
+            key: mngr.next_update_k(),
+            type_is: std::any::type_name::<T>(),
+        };
         let s = Self {
             id,
             notifier_index,
@@ -388,7 +391,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
     }
 
     /// A unique identifier.
-    pub fn notifier_index(&self) -> usize {
+    pub fn notifier_index(&self) -> SourceId {
         self.notifier_index
     }
 }
@@ -402,8 +405,8 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
 #[derive(Debug, IsContainer)]
 pub struct GpuArray<T> {
     array: Array<T>,
-    notifier_index: usize,
-    notifier: async_channel::Sender<usize>,
+    notifier_index: SourceId,
+    notifier: async_channel::Sender<SourceId>,
     updates: Arc<Mutex<Vec<SlabUpdate>>>,
 }
 
@@ -435,7 +438,10 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
                 elements,
             }
         };
-        let notifier_index = mngr.next_update_k();
+        let notifier_index = SourceId {
+            key: mngr.next_update_k(),
+            type_is: std::any::type_name::<[T]>(),
+        };
         let g = GpuArray {
             notifier_index,
             notifier: mngr.notifier.0.clone(),
@@ -476,7 +482,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
     }
 
     /// A unique identifier.
-    pub fn notifier_index(&self) -> usize {
+    pub fn notifier_index(&self) -> SourceId {
         self.notifier_index
     }
 }
@@ -567,7 +573,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
     }
 
     /// A unique identifier.
-    pub fn notifier_index(&self) -> usize {
+    pub fn notifier_index(&self) -> SourceId {
         self.gpu_value.notifier_index
     }
 }

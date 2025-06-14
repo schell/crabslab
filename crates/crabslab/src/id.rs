@@ -131,6 +131,26 @@ impl<T> core::ops::Add<Id<T>> for u32 {
     }
 }
 
+#[cfg(not(target_arch = "spirv"))]
+impl<T: SlabItem> core::ops::Index<Id<T>> for [u32] {
+    type Output = T;
+
+    fn index(&self, id: Id<T>) -> &Self::Output {
+        let index = id.index();
+        let s = &self[index..index + T::SLAB_SIZE];
+        unsafe { &*(s.as_ptr() as *const T) }
+    }
+}
+
+#[cfg(not(target_arch = "spirv"))]
+impl<T: SlabItem> core::ops::IndexMut<Id<T>> for [u32] {
+    fn index_mut(&mut self, id: Id<T>) -> &mut Self::Output {
+        let index = id.index();
+        let s = &mut self[index..index + T::SLAB_SIZE];
+        unsafe { &mut *(s.as_mut_ptr() as *mut T) }
+    }
+}
+
 impl<T> Id<T> {
     pub const NONE: Self = Id::new(ID_NONE);
 
@@ -160,8 +180,9 @@ impl<T> Id<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate as crabslab;
+    use crate::{self as crabslab};
     use crabslab::SlabItem;
+    use glam::Vec3;
 
     #[test]
     fn id_size() {
@@ -188,5 +209,57 @@ mod test {
         assert_eq!(1, index);
         let index = id.write_slab(index, &mut slab);
         assert_eq!(2, index);
+    }
+
+    #[test]
+    fn index() {
+        let mut slab = [0u32; 4];
+        let id = Id::<Vec3>::new(1);
+        {
+            let zero = &slab[id];
+            assert_eq!(&Vec3::ZERO, zero);
+        }
+
+        {
+            let one = &mut slab[id];
+            one.y = 1.0;
+        }
+
+        let one = &slab[id];
+        assert_eq!(&Vec3::new(0.0, 1.0, 0.0), one);
+    }
+
+    #[test]
+    fn slice_representation_sanity() {
+        #[derive(Debug)]
+        struct V3 {
+            x: f32,
+            y: f32,
+            z: f32,
+            __padding: f32,
+        }
+
+        fn get_mut<T>(slab: &mut [u32], index: usize) -> &mut T {
+            let slice = &mut slab[index..];
+            unsafe { &mut *(slice.as_mut_ptr() as *mut T) }
+        }
+
+        let mut slab = [0.0f32, 1.0, 2.0, 3.0].map(|f| f.to_bits());
+
+        {
+            let vec3: &mut V3 = get_mut(&mut slab, 0);
+            vec3.x *= 2.0;
+            vec3.y *= 2.0;
+            vec3.z *= 2.0;
+        }
+
+        {
+            let f: &mut f32 = get_mut(&mut slab, 3);
+            *f = 666.0;
+        }
+
+        let vec3: &V3 = unsafe { &*(slab.as_ptr() as *const V3) };
+
+        println!("vec3: {vec3:?}");
     }
 }

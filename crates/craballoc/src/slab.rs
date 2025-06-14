@@ -4,6 +4,7 @@ use crabslab::{Array, Id, SlabItem};
 use rustc_hash::{FxHashMap, FxHashSet};
 use snafu::prelude::*;
 use std::{
+    hash::Hash,
     ops::Deref,
     sync::{atomic::AtomicBool, Arc, RwLock},
 };
@@ -215,6 +216,46 @@ impl<T> SlabBuffer<T> {
     }
 }
 
+/// An identifier for a unique source of updates.
+#[derive(Clone, Copy, Debug)]
+pub struct SourceId {
+    pub key: usize,
+    /// This field is just for debugging.
+    pub type_is: &'static str,
+}
+
+impl core::fmt::Display for SourceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}({})", self.type_is, self.key))
+    }
+}
+
+impl PartialEq for SourceId {
+    fn eq(&self, other: &Self) -> bool {
+        self.key.eq(&other.key)
+    }
+}
+
+impl Eq for SourceId {}
+
+impl PartialOrd for SourceId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.key.cmp(&other.key))
+    }
+}
+
+impl Ord for SourceId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+impl Hash for SourceId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key.hash(state)
+    }
+}
+
 /// Manages slab allocations and updates over a parameterised buffer.
 ///
 /// Create a new instance using [`SlabAllocator::new`].
@@ -223,9 +264,12 @@ impl<T> SlabBuffer<T> {
 /// [`SlabAllocator::commit`] at least once before any data is written to the
 /// internal buffer.
 pub struct SlabAllocator<Runtime: IsRuntime> {
-    pub(crate) notifier: (async_channel::Sender<usize>, async_channel::Receiver<usize>),
+    pub(crate) notifier: (
+        async_channel::Sender<SourceId>,
+        async_channel::Receiver<SourceId>,
+    ),
     runtime: Runtime,
-    label: Arc<Option<String>>,
+    label: Arc<String>,
     len: Arc<AtomicUsize>,
     capacity: Arc<AtomicUsize>,
     needs_expansion: Arc<AtomicBool>,
@@ -238,9 +282,9 @@ pub struct SlabAllocator<Runtime: IsRuntime> {
     // The next monotonically increasing update identifier
     pub(crate) update_k: Arc<AtomicUsize>,
     // Weak references to all values that can write updates into this slab
-    pub(crate) update_sources: Arc<RwLock<FxHashMap<usize, WeakGpuRef>>>,
+    pub(crate) update_sources: Arc<RwLock<FxHashMap<SourceId, WeakGpuRef>>>,
     // Set of ids of the update sources that have updates queued
-    update_queue: Arc<RwLock<FxHashSet<usize>>>,
+    update_queue: Arc<RwLock<FxHashSet<SourceId>>>,
     // Recycled memory ranges
     pub(crate) recycles: Arc<RwLock<RangeManager<Range>>>,
 }
@@ -267,16 +311,12 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
 }
 
 impl<R: IsRuntime> SlabAllocator<R> {
-    pub fn new(runtime: impl AsRef<R>, default_buffer_usages: R::BufferUsages) -> Self {
-        Self::new_with_label(runtime, default_buffer_usages, None)
-    }
-
-    pub fn new_with_label(
+    pub fn new(
         runtime: impl AsRef<R>,
+        name: impl AsRef<str>,
         default_buffer_usages: R::BufferUsages,
-        label: Option<&str>,
     ) -> Self {
-        let label = Arc::new(label.map(|s| s.to_owned()));
+        let label = Arc::new(name.as_ref().to_owned());
         Self {
             runtime: runtime.as_ref().clone(),
             label,
@@ -301,11 +341,11 @@ impl<R: IsRuntime> SlabAllocator<R> {
         self.update_k.fetch_add(1, Ordering::Relaxed)
     }
 
-    pub(crate) fn insert_update_source(&self, k: usize, source: WeakGpuRef) {
-        log::trace!("slab insert_update_source {k}",);
-        let _ = self.notifier.0.try_send(k);
+    pub(crate) fn insert_update_source(&self, id: SourceId, source: WeakGpuRef) {
+        log::trace!("{} insert_update_source {id}", self.label);
+        let _ = self.notifier.0.try_send(id);
         // UNWRAP: panic on purpose
-        self.update_sources.write().unwrap().insert(k, source);
+        self.update_sources.write().unwrap().insert(id, source);
     }
 
     fn len(&self) -> usize {
@@ -402,13 +442,13 @@ impl<R: IsRuntime> SlabAllocator<R> {
     fn recreate_buffer(&self) -> SlabBuffer<R::Buffer> {
         let new_buffer = self.runtime.buffer_create(
             self.capacity(),
-            self.label.as_deref(),
+            Some(self.label.as_ref()),
             self.buffer_usages.clone(),
         );
         let mut guard = self.buffer.write().unwrap();
         if let Some(old_buffer) = guard.take() {
             self.runtime
-                .buffer_copy(&old_buffer, &new_buffer, self.label.as_deref());
+                .buffer_copy(&old_buffer, &new_buffer, Some(self.label.as_ref()));
         }
         let slab_buffer = SlabBuffer::new(
             self.invalidation_k.clone(),
@@ -434,11 +474,11 @@ impl<R: IsRuntime> SlabAllocator<R> {
     }
 
     /// Return the ids of all sources that require updating.
-    pub fn get_updated_source_ids(&self) -> FxHashSet<usize> {
+    pub fn get_updated_source_ids(&self) -> FxHashSet<SourceId> {
         // UNWRAP: panic on purpose
         let mut update_set = self.update_queue.write().unwrap();
-        while let Ok(source_index) = self.notifier.1.try_recv() {
-            update_set.insert(source_index);
+        while let Ok(source_id) = self.notifier.1.try_recv() {
+            update_set.insert(source_id);
         }
         update_set.clone()
     }
@@ -458,13 +498,16 @@ impl<R: IsRuntime> SlabAllocator<R> {
             // sources' updates into `writes`.
             let mut updates_guard = self.update_sources.write().unwrap();
             let mut recycles_guard = self.recycles.write().unwrap();
-            for key in update_set {
-                let delete = if let Some(gpu_ref) = updates_guard.get_mut(&key) {
+            for id in update_set {
+                let delete = if let Some(gpu_ref) = updates_guard.get_mut(&id) {
                     let count = gpu_ref.weak.strong_count();
                     if count == 0 {
                         // recycle this allocation
                         let array = gpu_ref.u32_array;
-                        log::debug!("slab drain_updated_sources: recycling {key} {array:?}");
+                        log::debug!(
+                            "{} drain_updated_sources: recycling {id} {array:?}",
+                            self.label
+                        );
                         if array.is_null() {
                             log::debug!("  cannot recycle, null");
                         } else if array.is_empty() {
@@ -474,19 +517,18 @@ impl<R: IsRuntime> SlabAllocator<R> {
                         }
                         true
                     } else {
-                        gpu_ref
-                            .get_update()
-                            .into_iter()
-                            .flatten()
-                            .for_each(|u| writes.add_range(u));
+                        gpu_ref.get_update().into_iter().flatten().for_each(|u| {
+                            log::trace!("updating {id} {:?}", u.array);
+                            writes.add_range(u)
+                        });
                         false
                     }
                 } else {
-                    log::debug!("could not find {key}");
+                    log::debug!("could not find {id}");
                     false
                 };
                 if delete {
-                    let _ = updates_guard.remove(&key);
+                    let _ = updates_guard.remove(&id);
                 }
             }
             // Defrag the recycle ranges

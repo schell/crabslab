@@ -13,7 +13,7 @@ resolver = "2"
 [workspace.dependencies]
 async-channel = "1.8"
 bytemuck = { version = "1.13.0", features = ["derive"] }
-glam = { version = "0.29", default-features = false }
+glam = { version = "0.30", default-features = false }
 log = "0.4"
 rustc-hash = "1.1"
 snafu = "0.8"

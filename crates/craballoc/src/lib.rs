@@ -29,7 +29,7 @@ mod test {
 
     #[test]
     fn mngr_updates_count_sanity() {
-        let slab = SlabAllocator::new(CpuRuntime, ());
+        let slab = SlabAllocator::new(CpuRuntime, "sanity", ());
         assert!(
             slab.get_buffer().is_none(),
             "should not have a buffer until after 'commit'"
@@ -93,7 +93,7 @@ mod test {
 
     #[test]
     fn slab_manager_sanity() {
-        let m = SlabAllocator::new(CpuRuntime, ());
+        let m = SlabAllocator::new(CpuRuntime, "sanity", ());
         log::info!("allocating 4 unused u32 slots");
         let _ = m.allocate::<u32>();
         let _ = m.allocate::<u32>();
@@ -168,7 +168,7 @@ mod test {
 
     #[test]
     fn hybrid_write_guard() {
-        let m = SlabAllocator::new(CpuRuntime, ());
+        let m = SlabAllocator::new(CpuRuntime, "sanity", ());
         let h4 = m.new_value(0u32);
         assert!(
             m.get_buffer().is_none(),
@@ -196,5 +196,20 @@ mod test {
 
         let buffer = m.get_buffer().unwrap();
         assert_eq!(&[10], buffer.as_vec().as_slice());
+    }
+
+    #[test]
+    fn overwrite_sanity() {
+        let m = SlabAllocator::new(CpuRuntime, "sanity", ());
+        let a = m.new_value(0u32);
+        m.commit();
+        a.modify(|u| *u = 1);
+        a.modify(|u| *u = 2);
+        let vs = m.get_buffer().unwrap().as_vec().clone();
+        assert_eq!(0, vs[0]);
+
+        m.commit();
+        let vs = m.get_buffer().unwrap().as_vec().clone();
+        assert_eq!(2, vs[0]);
     }
 }

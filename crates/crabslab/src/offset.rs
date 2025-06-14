@@ -108,4 +108,8 @@ impl<F, T> Offset<F, T> {
             _phantom: PhantomData,
         }
     }
+
+    pub fn index(&self) -> usize {
+        self.offset as usize
+    }
 }

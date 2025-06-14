@@ -7,6 +7,8 @@ mod array;
 mod id;
 mod slab;
 
+// #[cfg(not(target_arch = "spirv"))]
+// pub mod hologram;
 pub mod impl_slab_item;
 pub mod offset;
 
