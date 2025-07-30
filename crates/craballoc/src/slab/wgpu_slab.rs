@@ -1,5 +1,5 @@
 //! Slab allocation of WebGPU buffers.
-use crabslab::{Array, Slab, SlabItem};
+use crabslab::{Array, Id, Slab, SlabItem};
 use snafu::OptionExt;
 
 use crate::{
@@ -20,6 +20,18 @@ impl SlabAllocator<WgpuRuntime> {
         self.runtime
             .buffer_read(&internal_buffer, self.len(), range)
             .await
+    }
+
+    /// Read on value from the GPU.
+    #[tracing::instrument(skip_all)]
+    pub async fn read_one<T: SlabItem + Default>(
+        &self,
+        id: Id<T>,
+    ) -> Result<T, SlabAllocatorError> {
+        let index = id.index();
+        let range = index..(index + T::SLAB_SIZE);
+        let data = self.read(range).await?;
+        Ok(data.read_unchecked(Id::<T>::new(0)))
     }
 
     /// Read an array of typed values from the GPU.

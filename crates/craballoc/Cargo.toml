@@ -1,6 +1,6 @@
 [package]
 name = "craballoc"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Slab allocator with RAII"
 repository = "https://github.com/schell/crabslab"
