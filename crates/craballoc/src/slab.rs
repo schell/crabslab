@@ -34,6 +34,10 @@ pub enum SlabAllocatorError {
     #[snafu(display("Async error: {source}"))]
     Async { source: wgpu::BufferAsyncError },
 
+    #[cfg(feature = "wgpu")]
+    #[snafu(display("Poll error: {source}"))]
+    Poll { source: wgpu::PollError },
+
     #[snafu(display("{source}"))]
     Other { source: Box<dyn std::error::Error> },
 }

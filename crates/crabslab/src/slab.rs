@@ -301,7 +301,7 @@ impl GrowableSlab for Vec<u32> {
 
     fn increment_len(&mut self, n: usize) -> usize {
         let index = self.len();
-        self.extend(core::iter::repeat(0).take(n));
+        self.extend(std::iter::repeat_n(0, n));
         index
     }
 }

@@ -10,7 +10,7 @@ use crabslab::Array;
 use snafu::ResultExt;
 use tracing::Instrument;
 
-use crate::slab::{AsyncRecvSnafu, AsyncSnafu, SlabAllocatorError};
+use crate::slab::{AsyncRecvSnafu, AsyncSnafu, PollSnafu, SlabAllocatorError};
 
 /// An update to a slab.
 ///
@@ -282,8 +282,10 @@ impl IsRuntime for WgpuRuntime {
             buffer_slice.map_async(wgpu::MapMode::Read, move |res| tx.try_send(res).unwrap());
         });
         tracing::trace_span!("poll").in_scope(|| {
-            self.device.poll(wgpu::Maintain::wait_for(submission_index));
-        });
+            self.device
+                .poll(wgpu::PollType::WaitForSubmissionIndex(submission_index))
+                .context(PollSnafu)
+        })?;
         rx.recv()
             .instrument(tracing::info_span!("recv"))
             .await
