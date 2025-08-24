@@ -1,6 +1,6 @@
 [package]
 name = "craballoc"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "Slab allocator with RAII"
 repository = "https://github.com/schell/crabslab"
@@ -16,7 +16,7 @@ wgpu = ["dep:wgpu"]
 [dependencies]
 async-channel.workspace = true
 bytemuck.workspace = true
-crabslab = { path = "../crabslab", version = "0.6.3" }
+crabslab = { path = "../crabslab", version = "0.6.5" }
 log.workspace = true
 rustc-hash.workspace = true
 snafu.workspace = true
