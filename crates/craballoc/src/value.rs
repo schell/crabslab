@@ -2,7 +2,7 @@
 
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex, RwLock, RwLockWriteGuard, Weak},
+    sync::{Arc, Mutex, RwLock, RwLockWriteGuard, Weak as WeakStd},
 };
 
 use crabslab::{Array, Id, IsContainer, Slab, SlabItem};
@@ -14,7 +14,7 @@ use crate::{
 
 pub struct WeakGpuRef {
     pub(crate) u32_array: Array<u32>,
-    pub(crate) weak: Weak<Mutex<Vec<SlabUpdate>>>,
+    pub(crate) weak: WeakStd<Mutex<Vec<SlabUpdate>>>,
     pub(crate) takes_update: bool,
 }
 
@@ -58,7 +58,7 @@ pub struct WeakGpu<T> {
     pub(crate) id: Id<T>,
     pub(crate) notifier_index: SourceId,
     pub(crate) notify: async_channel::Sender<SourceId>,
-    pub(crate) update: Weak<Mutex<Vec<SlabUpdate>>>,
+    pub(crate) update: WeakStd<Mutex<Vec<SlabUpdate>>>,
 }
 
 impl<T> Clone for WeakGpu<T> {
@@ -73,6 +73,10 @@ impl<T> Clone for WeakGpu<T> {
 }
 
 impl<T> WeakGpu<T> {
+    pub fn id(&self) -> Id<T> {
+        self.id
+    }
+
     pub fn from_gpu(gpu: &Gpu<T>) -> Self {
         Self {
             id: gpu.id,
@@ -102,7 +106,7 @@ impl<T> WeakGpu<T> {
 #[derive(Debug, IsContainer)]
 #[proxy(WeakContainer)]
 pub struct WeakHybrid<T> {
-    pub(crate) weak_cpu: Weak<RwLock<T>>,
+    pub(crate) weak_cpu: WeakStd<RwLock<T>>,
     pub(crate) weak_gpu: WeakGpu<T>,
 }
 
@@ -271,6 +275,12 @@ impl<T> Clone for Hybrid<T> {
     }
 }
 
+impl<T> Hybrid<T> {
+    pub fn id(&self) -> Id<T> {
+        self.gpu_value.id()
+    }
+}
+
 impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
     pub fn new(mngr: &SlabAllocator<impl IsRuntime>, value: T) -> Self {
         let cpu_value = Arc::new(RwLock::new(value.clone()));
@@ -284,10 +294,6 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
     /// Returns the number of clones of this Hybrid on the CPU.
     pub fn ref_count(&self) -> usize {
         Arc::strong_count(&self.gpu_value.update)
-    }
-
-    pub fn id(&self) -> Id<T> {
-        self.gpu_value.id()
     }
 
     pub fn get(&self) -> T {
@@ -354,6 +360,12 @@ impl<T> Clone for Gpu<T> {
     }
 }
 
+impl<T> Gpu<T> {
+    pub fn id(&self) -> Id<T> {
+        self.id
+    }
+}
+
 impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
     pub fn new(mngr: &SlabAllocator<impl IsRuntime>, value: T) -> Self {
         let id = mngr.allocate::<T>();
@@ -370,10 +382,6 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
         s.set(value);
         mngr.insert_update_source(notifier_index, WeakGpuRef::from_gpu(&s));
         s
-    }
-
-    pub fn id(&self) -> Id<T> {
-        self.id
     }
 
     pub fn set(&self, value: T) {
@@ -403,6 +411,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
 /// Updates are syncronized to the GPU at the behest of the
 /// [`SlabAllocator`] that created this array.
 #[derive(Debug, IsContainer)]
+#[array]
 pub struct GpuArray<T> {
     array: Array<T>,
     notifier_index: SourceId,
@@ -424,6 +433,20 @@ impl<T> Clone for GpuArray<T> {
             array: self.array,
             updates: self.updates.clone(),
         }
+    }
+}
+
+impl<T> GpuArray<T> {
+    pub fn len(&self) -> usize {
+        self.array.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.array.is_empty()
+    }
+
+    pub fn array(&self) -> Array<T> {
+        self.array
     }
 }
 
@@ -450,18 +473,6 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
         };
         mngr.insert_update_source(notifier_index, WeakGpuRef::from_gpu_array(&g));
         g
-    }
-
-    pub fn len(&self) -> usize {
-        self.array.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.array.is_empty()
-    }
-
-    pub fn array(&self) -> Array<T> {
-        self.array
     }
 
     pub fn get_id(&self, index: usize) -> Id<T> {
@@ -494,6 +505,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
 /// Updates are syncronized to the GPU at the behest of the
 /// [`SlabAllocator`] that created this array.
 #[derive(IsContainer)]
+#[array]
 pub struct HybridArray<T> {
     cpu_value: Arc<RwLock<Vec<T>>>,
     gpu_value: GpuArray<T>,
@@ -517,6 +529,20 @@ impl<T> Clone for HybridArray<T> {
     }
 }
 
+impl<T> HybridArray<T> {
+    pub fn len(&self) -> usize {
+        self.gpu_value.array.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.gpu_value.is_empty()
+    }
+
+    pub fn array(&self) -> Array<T> {
+        self.gpu_value.array()
+    }
+}
+
 impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
     pub fn new(mngr: &SlabAllocator<impl IsRuntime>, values: impl IntoIterator<Item = T>) -> Self {
         let values = values.into_iter().collect::<Vec<_>>();
@@ -530,18 +556,6 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
 
     pub fn ref_count(&self) -> usize {
         Arc::strong_count(&self.gpu_value.updates)
-    }
-
-    pub fn len(&self) -> usize {
-        self.gpu_value.array.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.gpu_value.is_empty()
-    }
-
-    pub fn array(&self) -> Array<T> {
-        self.gpu_value.array()
     }
 
     pub fn get(&self, index: usize) -> Option<T> {
@@ -608,4 +622,18 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
 /// ```
 pub trait IsContainer {
     type Container<T>;
+    type Pointer<T>;
+
+    /// Returns a pointer to the data within this container.
+    fn get_pointer<T>(container: &Self::Container<T>) -> Self::Pointer<T>;
+}
+
+/// A type that represents no container, just the value itself.
+pub struct NoContainer;
+
+impl IsContainer for NoContainer {
+    type Container<T> = T;
+    type Pointer<T> = ();
+
+    fn get_pointer<T>(_container: &Self::Container<T>) -> Self::Pointer<T> {}
 }

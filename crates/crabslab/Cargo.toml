@@ -1,6 +1,6 @@
 [package]
 name = "crabslab"
-version = "0.6.5"
+version = "0.6.6"
 edition = "2021"
 description = "Slab allocator focused on GPU compute (rust-gpu)"
 repository = "https://github.com/schell/crabslab"
@@ -21,7 +21,7 @@ async-channel = {version = "1.8", optional=true}
 bytemuck = {version = "1.13.0", optional=true}
 futures-lite = {workspace = true, optional=true}
 log = {version = "0.4", optional=true}
-crabslab-derive = { version = "0.4.4", path = "../crabslab-derive" }
+crabslab-derive = { version = "0.4.5", path = "../crabslab-derive" }
 snafu = {version = "0.7", optional=true}
 
 [target.'cfg(not(target_arch = "spirv"))'.dependencies]
@@ -30,3 +30,6 @@ glam = { workspace = true, features = ["std"], optional = true }
 [target.'cfg(target_arch = "spirv")'.dependencies]
 glam = { workspace = true, default-features = false, features = ["libm"], optional = true }
 spirv-std = "0.9.0"
+
+[dev-dependencies]
+bytemuck.workspace = true

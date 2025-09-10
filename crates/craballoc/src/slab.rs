@@ -1,4 +1,4 @@
-//! Slab allocators.
+//! Slab allocators that run on the CPU.
 use core::sync::atomic::{AtomicUsize, Ordering};
 use crabslab::{Array, Id, SlabItem};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -136,8 +136,8 @@ impl<T> SlabBuffer<T> {
     ///
     /// Typically this function is used by structs that own the [`SlabAllocator`]. These owning
     /// structs will call [`SlabAllocator::commit`] which returns a [`SlabBuffer`]. The callsite
-    /// can then call [`SlabBuffer::is_new`] to determine if any downstream resources (like bindgroups)
-    /// need to be recreated.
+    /// can then call [`SlabBuffer::is_new_this_commit`] to determine if any
+    /// downstream resources (like bindgroups) need to be recreated.
     ///
     /// This pattern keeps the owning struct from having to also store the `SlabBuffer`.
     pub fn is_new_this_commit(&self) -> bool {
@@ -264,7 +264,7 @@ impl Hash for SourceId {
 ///
 /// Create a new instance using [`SlabAllocator::new`].
 ///
-/// Upon creation you will need to call [`SlabAllocator::get_updated_buffer`] or
+/// Upon creation you will need to call [`SlabAllocator::get_buffer`] or
 /// [`SlabAllocator::commit`] at least once before any data is written to the
 /// internal buffer.
 pub struct SlabAllocator<Runtime: IsRuntime> {
@@ -550,15 +550,15 @@ impl<R: IsRuntime> SlabAllocator<R> {
         writes
     }
 
-    /// Returns whether any update sources, most likely from [`Hybrid`] or [`Gpu`] values,
-    /// have queued updates waiting to be synchronized.
+    /// Returns whether any update sources, most likely from [`Hybrid`] or [`Gpu`](crate::value::Gpu) values,
+    /// have queued updates waiting to be committed.
     pub fn has_queued_updates(&self) -> bool {
         !self.notifier.1.is_empty() || !self.update_queue.read().unwrap().is_empty()
     }
 
-    /// Perform upkeep on the slab, commiting changes to the internal buffer.
+    /// Perform upkeep on the slab, synchronizing changes to the internal buffer.
     ///
-    /// Changes made to [`Hybrid`] and [`Gpu`] values created by this slab are not committed
+    /// Changes made to [`Hybrid`] and [`Gpu`](crate::value::Gpu) values created by this slab are not committed
     /// until this function has been called.
     ///
     /// The internal buffer is not created until the first time this function is called.
