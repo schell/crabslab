@@ -16,7 +16,7 @@ wgpu = ["dep:wgpu"]
 [dependencies]
 async-channel.workspace = true
 bytemuck.workspace = true
-crabslab = { path = "../crabslab", version = "0.6.5" }
+crabslab = { path = "../crabslab", version = "0.6.6" }
 log.workspace = true
 rustc-hash.workspace = true
 snafu.workspace = true
