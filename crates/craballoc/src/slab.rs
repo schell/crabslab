@@ -352,8 +352,18 @@ impl<R: IsRuntime> SlabAllocator<R> {
         self.update_sources.write().unwrap().insert(id, source);
     }
 
-    fn len(&self) -> usize {
+    /// The length of the underlying buffer, in u32 slots.
+    ///
+    /// This does not include data that has not yet been committed.
+    pub fn len(&self) -> usize {
         self.len.load(Ordering::Relaxed)
+    }
+
+    /// Whether the underlying buffer is empty.
+    ///
+    /// This does not include data that has not yet been committed.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub(crate) fn allocate<T: SlabItem>(&self) -> Id<T> {
