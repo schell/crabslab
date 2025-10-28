@@ -26,6 +26,13 @@ impl<T: SlabItem> Iterator for ArrayIter<T> {
 
 /// A pointer to contiguous `T` elements in a slab.
 ///
+/// ## Note
+/// It's very important to keep in mind that although the array carries
+/// around `T`, the `index` is always a u32 offset.
+///
+/// `len` is the number of contiguous `T` elements, but `index` is the
+/// u32 offset of the first `T` element in the slab.
+///
 /// ```rust
 /// use crabslab::{Array, CpuSlab, GrowableSlab, Id, Slab, SlabItem};
 ///
@@ -113,9 +120,9 @@ impl<T: SlabItem> Default for Array<T> {
 impl<T> Array<T> {
     pub const NONE: Self = Array::new(u32::MAX, 0);
 
-    pub const fn new(index: u32, len: u32) -> Self {
+    pub const fn new(u32_offset: u32, len: u32) -> Self {
         Self {
-            index,
+            index: u32_offset,
             len,
             _phantom: PhantomData,
         }
@@ -131,10 +138,6 @@ impl<T> Array<T> {
 
     pub fn is_null(&self) -> bool {
         self.index == u32::MAX
-    }
-
-    pub fn contains_index(&self, index: usize) -> bool {
-        index >= self.index as usize && index < (self.index + self.len) as usize
     }
 
     pub fn at(&self, index: usize) -> Id<T>
@@ -171,14 +174,26 @@ impl<T> Array<T> {
         }
     }
 
+    /// Return the range this array occupies.
+    ///
+    /// ## Note
+    /// Keep in mind that this is the range of `T`s that this array occupies,
+    /// not necessarily the u32 slab range of the underlying data.
+    ///
+    /// If you require the u32 slab range that this array occupies, you can
+    /// use `self.into_u32_array().range()`.
+    pub fn range(&self) -> core::ops::Range<usize> {
+        self.index as usize..(self.index as usize + self.len())
+    }
+
     #[cfg(not(target_arch = "spirv"))]
     /// Return the slice of the slab that this array represents.
     pub fn sub_slab<'a>(&'a self, slab: &'a [u32]) -> &'a [u32]
     where
         T: SlabItem,
     {
-        let arr = self.into_u32_array();
-        &slab[arr.index as usize..(arr.index + arr.len) as usize]
+        let range = self.into_u32_array().range();
+        &slab[range]
     }
 }
 

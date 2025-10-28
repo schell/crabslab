@@ -152,7 +152,11 @@ impl<T: SlabItem> core::ops::IndexMut<Id<T>> for [u32] {
 }
 
 impl<T> Id<T> {
+    /// The non-id. Analogous to `None::<Id>`.
     pub const NONE: Self = Id::new(ID_NONE);
+
+    /// An `Id` that points to the first slot on a slab.
+    pub const ZERO: Self = Id::new(0);
 
     pub const fn new(i: u32) -> Self {
         Id(i, PhantomData)
@@ -174,6 +178,13 @@ impl<T> Id<T> {
 
     pub fn is_some(&self) -> bool {
         !self.is_none()
+    }
+}
+
+impl<T: SlabItem> Id<T> {
+    /// Returns the u32 slab range that this `Id` occupies.
+    pub fn range_u32(&self) -> core::ops::Range<usize> {
+        self.index()..(self.index() + T::SLAB_SIZE)
     }
 }
 

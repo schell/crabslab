@@ -242,6 +242,7 @@ impl PartialEq for SourceId {
 
 impl Eq for SourceId {}
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl PartialOrd for SourceId {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.key.cmp(&other.key))
