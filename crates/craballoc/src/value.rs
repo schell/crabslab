@@ -329,6 +329,16 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
     pub fn notifier_index(&self) -> SourceId {
         self.gpu_value.notifier_index
     }
+
+    /// Sets the inner value, but **does not sync to the GPU**.
+    ///
+    /// Used primarily to bring changes from the GPU back to the
+    /// CPU manually.
+    ///
+    /// Do not use this unless you really know what you're doing.
+    pub fn set_without_sync(&self, value: T) {
+        *self.cpu_value.write().unwrap() = value;
+    }
 }
 
 /// A type that lives only on the GPU.
@@ -656,6 +666,24 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
     /// A unique identifier.
     pub fn notifier_index(&self) -> SourceId {
         self.gpu_value.notifier_index
+    }
+
+    /// Sets the items within the range **without syncing to the GPU**.
+    ///
+    /// Used primarily to bring changes from the GPU back to the
+    /// CPU manually.
+    ///
+    /// Do not use this unless you really know what you're doing.
+    ///
+    /// ## Panics
+    /// Panics if the end of the range is greater than the number of items in
+    /// the `HybridArray`.
+    pub fn set_without_sync(&self, range: std::ops::Range<usize>, items: &[T]) {
+        let mut guard = self.cpu_value.write().unwrap();
+        let slice = &mut guard[range];
+        for (here, there) in slice.iter_mut().zip(items) {
+            *here = there.clone();
+        }
     }
 }
 

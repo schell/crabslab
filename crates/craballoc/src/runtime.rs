@@ -2,8 +2,8 @@
 
 use std::{
     future::Future,
-    ops::Deref,
-    sync::{Arc, Mutex},
+    ops::{Deref, DerefMut},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use crabslab::Array;
@@ -106,16 +106,18 @@ impl AsRef<CpuRuntime> for CpuRuntime {
     }
 }
 
-/// A slab buffer used _only_ on the GPU.
-///
-/// This is mostly for testing.
+/// A slab buffer used _only_ on the CPU.
 pub struct VecSlab {
-    inner: Mutex<Vec<u32>>,
+    inner: RwLock<Vec<u32>>,
 }
 
 impl VecSlab {
     pub fn as_vec(&self) -> impl Deref<Target = Vec<u32>> + '_ {
-        self.inner.lock().unwrap()
+        self.inner.read().unwrap()
+    }
+
+    pub fn as_mut_vec(&self) -> impl DerefMut<Target = Vec<u32>> + '_ {
+        self.inner.write().unwrap()
     }
 }
 
@@ -129,7 +131,7 @@ impl IsRuntime for CpuRuntime {
             label.unwrap_or("unknown")
         );
         VecSlab {
-            inner: Mutex::new(vec![0; capacity]),
+            inner: RwLock::new(vec![0; capacity]),
         }
     }
 
@@ -141,14 +143,14 @@ impl IsRuntime for CpuRuntime {
     ) {
         log::trace!("performing copy '{}'", label.unwrap_or("unknown"));
         let this = &destination_buffer;
-        let source = source_buffer.inner.lock().unwrap();
-        let mut destination = this.inner.lock().unwrap();
+        let source = source_buffer.inner.read().unwrap();
+        let mut destination = this.inner.write().unwrap();
         let destination_slice = &mut destination[0..source.len()];
         destination_slice.copy_from_slice(source.as_slice());
     }
 
     fn buffer_write<U: Iterator<Item = SlabUpdate>>(&self, updates: U, buffer: &Self::Buffer) {
-        let mut guard = buffer.inner.lock().unwrap();
+        let mut guard = buffer.inner.write().unwrap();
         log::trace!("writing to vec len:{}", guard.len());
         for SlabUpdate { array, elements } in updates {
             log::trace!("array: {array:?} elements: {elements:?}");
@@ -163,7 +165,7 @@ impl IsRuntime for CpuRuntime {
         buffer_len: usize,
         range: impl std::ops::RangeBounds<usize>,
     ) -> Result<Vec<u32>, SlabAllocatorError> {
-        let v = buffer.inner.lock().unwrap();
+        let v = buffer.inner.read().unwrap();
         debug_assert_eq!(v.len(), buffer_len);
         let (start, end, len) = range_to_indices_and_len(v.len(), range);
         let mut output = vec![0; len];
