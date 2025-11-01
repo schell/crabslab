@@ -1,6 +1,10 @@
 //! Crafting a tasty slab.
+//!
+//! This crate provides [`Arena`] allocation backed by a `u32` slab.
 #![doc = include_str!("../README.md")]
 
+pub mod arena;
+mod buffer;
 pub mod range;
 pub mod runtime;
 pub mod slab;
@@ -18,6 +22,29 @@ pub mod prelude {
 use prelude::crabslab::SlabItem;
 #[cfg(doc)]
 use prelude::*;
+
+#[cfg(all(test, feature = "wgpu"))]
+fn wgpu_runtime() -> crate::runtime::WgpuRuntime {
+    let backends = wgpu::Backends::PRIMARY;
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends,
+        ..Default::default()
+    });
+    let adapter =
+        futures_lite::future::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .unwrap();
+    let (device, queue) =
+        futures_lite::future::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .unwrap();
+    crate::runtime::WgpuRuntime {
+        device: device.into(),
+        queue: queue.into(),
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -93,6 +120,8 @@ mod test {
 
     #[test]
     fn slab_manager_sanity() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
         let m = SlabAllocator::new(CpuRuntime, "sanity", ());
         log::info!("allocating 4 unused u32 slots");
         let _ = m.allocate::<u32>();

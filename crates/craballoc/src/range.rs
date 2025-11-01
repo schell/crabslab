@@ -84,10 +84,10 @@ impl IsRange for SlabUpdate {
 
         let mut elements = vec![0u32; array.len()];
 
-        let self_index = self.array.index - array.index;
-        elements.write_indexed_slice(&self.elements, self_index as usize);
-        let other_index = other.array.index - array.index;
-        elements.write_indexed_slice(&other.elements, other_index as usize);
+        let self_index = self.array.id.index() - array.id.index();
+        elements.write_indexed_slice(&self.elements, self_index);
+        let other_index = other.array.id.index() - array.id.index();
+        elements.write_indexed_slice(&other.elements, other_index);
 
         self.array = array;
         self.elements = elements;

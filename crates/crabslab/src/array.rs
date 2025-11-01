@@ -46,11 +46,10 @@ impl<T: SlabItem> Iterator for ArrayIter<T> {
 /// ```
 #[repr(C)]
 pub struct Array<T> {
-    // u32 offset in the slab
-    pub index: u32,
+    /// Identifier of the first element in the array.
+    pub id: Id<T>,
     // number of `T` elements in the array
     pub len: u32,
-    _phantom: PhantomData<T>,
 }
 
 impl<T> Clone for Array<T> {
@@ -64,11 +63,7 @@ impl<T> Copy for Array<T> {}
 /// An `Id<T>` is an `Array<T>` with a length of 1.
 impl<T> From<Id<T>> for Array<T> {
     fn from(id: Id<T>) -> Self {
-        Self {
-            index: id.inner(),
-            len: 1,
-            _phantom: PhantomData,
-        }
+        Self { id, len: 1 }
     }
 }
 
@@ -80,19 +75,14 @@ impl<T> core::fmt::Debug for Array<T> {
                 core::any::type_name::<T>()
             ))
         } else {
-            f.write_fmt(core::format_args!(
-                "Array<{}>({}, {})",
-                core::any::type_name::<T>(),
-                self.index,
-                self.len
-            ))
+            f.write_fmt(core::format_args!("Array[{:?}; {}]", self.id, self.len))
         }
     }
 }
 
 impl<T> PartialEq for Array<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.index == other.index && self.len == other.len
+        self.id == other.id && self.len == other.len
     }
 }
 
@@ -100,14 +90,14 @@ impl<T: SlabItem> SlabItem for Array<T> {
     const SLAB_SIZE: usize = 2;
 
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        let index = self.index.write_slab(index, slab);
+        let index = self.id.write_slab(index, slab);
         self.len.write_slab(index, slab)
     }
 
     fn read_slab(index: usize, slab: &[u32]) -> Self {
         let start = u32::read_slab(index, slab);
         let len = u32::read_slab(index + 1, slab);
-        Array::new(start, len)
+        Array::new(Id::new(start), len)
     }
 }
 
@@ -118,14 +108,10 @@ impl<T: SlabItem> Default for Array<T> {
 }
 
 impl<T> Array<T> {
-    pub const NONE: Self = Array::new(u32::MAX, 0);
+    pub const NONE: Self = Array::new(Id::NONE, 0);
 
-    pub const fn new(u32_offset: u32, len: u32) -> Self {
-        Self {
-            index: u32_offset,
-            len,
-            _phantom: PhantomData,
-        }
+    pub const fn new(id: Id<T>, len: u32) -> Self {
+        Self { id, len }
     }
 
     pub fn len(&self) -> usize {
@@ -137,7 +123,7 @@ impl<T> Array<T> {
     }
 
     pub fn is_null(&self) -> bool {
-        self.index == u32::MAX
+        self.id.is_none()
     }
 
     pub fn at(&self, index: usize) -> Id<T>
@@ -147,12 +133,12 @@ impl<T> Array<T> {
         if index >= self.len() {
             Id::NONE
         } else {
-            Id::new(self.index + (T::SLAB_SIZE * index) as u32)
+            Id::new(self.id.inner() + (T::SLAB_SIZE * index) as u32)
         }
     }
 
     pub fn starting_index(&self) -> usize {
-        self.index as usize
+        self.id.index()
     }
 
     pub fn iter(&self) -> ArrayIter<T> {
@@ -168,9 +154,8 @@ impl<T> Array<T> {
         T: SlabItem,
     {
         Array {
-            index: self.index,
+            id: Id::new(self.id.inner()),
             len: self.len * T::SLAB_SIZE as u32,
-            _phantom: PhantomData,
         }
     }
 
@@ -183,7 +168,8 @@ impl<T> Array<T> {
     /// If you require the u32 slab range that this array occupies, you can
     /// use `self.into_u32_array().range()`.
     pub fn range(&self) -> core::ops::Range<usize> {
-        self.index as usize..(self.index as usize + self.len())
+        let start = self.id.index();
+        start..(start + self.len())
     }
 
     #[cfg(not(target_arch = "spirv"))]
@@ -199,9 +185,9 @@ impl<T> Array<T> {
 
 impl Array<u32> {
     pub fn union(&mut self, other: &Array<u32>) {
-        let start = self.index.min(other.index);
-        let end = (self.index + self.len).max(other.index + other.len);
-        self.index = start;
-        self.len = end - start;
+        let start = self.id.min(other.id);
+        let end = (self.id.inner() + self.len).max(other.id.inner() + other.len);
+        self.id = start;
+        self.len = end - start.inner();
     }
 }

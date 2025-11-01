@@ -38,7 +38,7 @@ impl WeakGpuRef {
 
     fn from_gpu<T: SlabItem>(gpu: &Gpu<T>) -> Self {
         WeakGpuRef {
-            u32_array: Array::new(gpu.id.inner(), T::SLAB_SIZE as u32),
+            u32_array: Array::new(Id::new(gpu.id.inner()), T::SLAB_SIZE as u32),
             weak: Arc::downgrade(&gpu.update),
             takes_update: true,
         }
@@ -397,7 +397,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
     pub fn set(&self, value: T) {
         // UNWRAP: panic on purpose
         *self.update.lock().unwrap() = vec![SlabUpdate {
-            array: Array::new(self.id.inner(), T::SLAB_SIZE as u32),
+            array: Array::new(Id::new(self.id.inner()), T::SLAB_SIZE as u32),
             elements: {
                 let mut es = vec![0u32; T::SLAB_SIZE];
                 es.write(Id::new(0), &value);
@@ -517,14 +517,14 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
             "length of items {len} is greater than the range provided {range_len}"
         );
         let mut elements = vec![0u32; T::SLAB_SIZE * len];
-        let array = Array::<T>::new(0, len as u32);
+        let array = Array::<T>::new(Id::ZERO, len as u32);
         for (id, item) in array.iter().zip(items) {
             elements.write(id, item);
         }
         let inner_offset = inner.start * T::SLAB_SIZE;
-        let index = self.array.index + inner_offset as u32;
+        let index = self.array.id.inner() + inner_offset as u32;
         self.updates.lock().unwrap().push(SlabUpdate {
-            array: Array::new(index, elements.len() as u32),
+            array: Array::new(Id::new(index), elements.len() as u32),
             elements,
         });
         // UNWRAP: safe because it's unbounded

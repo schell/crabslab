@@ -23,10 +23,10 @@ pub struct SlabUpdate {
 
 impl SlabUpdate {
     pub fn intersects(&self, other: &Self) -> bool {
-        let here_start = self.array.index;
-        let there_start = other.array.index;
-        let here_end = self.array.index + self.array.len;
-        let there_end = other.array.index + other.array.len;
+        let here_start = self.array.id;
+        let there_start = other.array.id;
+        let here_end = self.array.id + self.array.len;
+        let there_end = other.array.id + other.array.len;
         !(here_start >= there_end || there_start >= here_end)
     }
 }

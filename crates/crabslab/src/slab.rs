@@ -197,7 +197,7 @@ pub trait GrowableSlab: Slab {
         }
         self.maybe_expand_to_fit::<T>(len);
         let index = self.increment_len(T::SLAB_SIZE * len);
-        Array::new(index as u32, len as u32)
+        Array::new(Id::new(index as u32), len as u32)
     }
 
     /// Append to the end of the buffer.
@@ -328,16 +328,16 @@ mod test {
         slab.write_indexed(&666, 1);
         let t = slab.read(Id::<[u32; 2]>::new(0));
         assert_eq!([42, 666], t);
-        let t: Vec<u32> = slab.read_vec(Array::new(0, 2));
+        let t: Vec<u32> = slab.read_vec(Array::new(Id::ZERO, 2));
         assert_eq!([42, 666], t[..]);
         slab.write_indexed_slice(&[1, 2, 3, 4], 2);
-        let t: Vec<u32> = slab.read_vec(Array::new(2, 4));
+        let t: Vec<u32> = slab.read_vec(Array::new(Id::new(2), 4));
         assert_eq!([1, 2, 3, 4], t[..]);
 
         // use _f32 explicit, otherwise it fails
         slab.write_indexed_slice(&[[1.0_f32, 2.0, 3.0, 4.0], [5.5, 6.5, 7.5, 8.5]], 0);
 
-        let arr = Array::<[f32; 4]>::new(0, 2);
+        let arr = Array::<[f32; 4]>::new(Id::ZERO, 2);
         assert_eq!(Id::new(0), arr.at(0));
         assert_eq!(Id::new(4), arr.at(1));
         assert_eq!([1.0, 2.0, 3.0, 4.0], slab.read(arr.at(0)));
@@ -378,7 +378,7 @@ mod test {
         let geometry_slab_size = Vertex::SLAB_SIZE * geometry.len();
         let mut slab = vec![0u32; geometry_slab_size + Array::<Vertex>::SLAB_SIZE];
         let index = 0usize;
-        let vertices = Array::<Vertex>::new(index as u32, geometry.len() as u32);
+        let vertices = Array::<Vertex>::new(Id::new(index as u32), geometry.len() as u32);
         let index = slab.write_indexed_slice(&geometry, index);
         assert_eq!(geometry_slab_size, index);
         let vertices_id = Id::<Array<Vertex>>::from(index);
