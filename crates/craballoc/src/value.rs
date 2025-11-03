@@ -9,7 +9,8 @@ use crabslab::{Array, Id, IsContainer, Slab, SlabItem};
 
 use crate::{
     runtime::{IsRuntime, SlabUpdate},
-    slab::{SlabAllocator, SourceId},
+    slab::SlabAllocator,
+    update::SourceId,
 };
 
 pub struct WeakGpuRef {
@@ -380,7 +381,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
     pub fn new(mngr: &SlabAllocator<impl IsRuntime>, value: T) -> Self {
         let id = mngr.allocate::<T>();
         let notifier_index = SourceId {
-            key: mngr.next_update_k(),
+            range: id.into(),
             type_is: std::any::type_name::<T>(),
         };
         let s = Self {
@@ -472,7 +473,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
             }
         };
         let notifier_index = SourceId {
-            key: mngr.next_update_k(),
+            range: array.into(),
             type_is: std::any::type_name::<[T]>(),
         };
         let g = GpuArray {

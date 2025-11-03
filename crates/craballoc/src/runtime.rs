@@ -60,6 +60,9 @@ pub trait IsRuntime: Clone {
     );
 
     /// Write the updates into the given buffer.
+    ///
+    // TODO: remove SlabUpdate from this, make it more idiomatic with `range: std::ops::Range<u32>`
+    // and `data: &[u32]`.
     fn buffer_write<U: Iterator<Item = SlabUpdate>>(&self, updates: U, buffer: &Self::Buffer);
 
     /// Read the range from the given buffer.

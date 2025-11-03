@@ -1,10 +1,13 @@
 //! Managing ranges of values.
 
-use crabslab::{Array, Slab, SlabItem};
+use crabslab::{Array, Id, SlabItem};
 
-use crate::runtime::SlabUpdate;
+use crate::{
+    runtime::SlabUpdate,
+    update::{CpuUpdate, SourceId},
+};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Range {
     pub first_index: u32,
     pub last_index: u32,
@@ -27,6 +30,15 @@ impl<T: SlabItem> From<Array<T>> for Range {
     }
 }
 
+impl<T: SlabItem> From<Id<T>> for Range {
+    fn from(id: Id<T>) -> Self {
+        Range {
+            first_index: id.inner(),
+            last_index: id.inner() + T::SLAB_SIZE as u32 - 1,
+        }
+    }
+}
+
 impl Range {
     pub fn len(&self) -> u32 {
         1 + self.last_index - self.first_index
@@ -43,54 +55,65 @@ impl Range {
 
 /// Represents a block of contiguous numbers.
 pub trait IsRange {
-    /// Returns `true` if the two ranges overlap or "touch".
-    fn should_merge_with(&self, other: &Self) -> bool;
+    /// Returns `true` if `self` is the left neighbor of `rhs`.
+    fn is_left_neighbor_of(&self, other: &Self) -> bool;
 
     /// Returns the union of two ranges.
-    fn union(&mut self, other: Self);
+    fn merge_with_right_neighbor(&mut self, rhs: Self);
 }
 
 impl IsRange for Range {
-    fn should_merge_with(&self, other: &Self) -> bool {
+    fn is_left_neighbor_of(&self, other: &Self) -> bool {
         debug_assert!(
             !self.intersects(other),
             "{self:?} intersects existing {other:?}, should never happen with Range"
         );
 
-        self.last_index + 1 == other.first_index || self.first_index == other.last_index + 1
+        self.last_index + 1 == other.first_index
     }
 
-    fn union(&mut self, other: Self) {
-        *self = Range {
-            first_index: self.first_index.min(other.first_index),
-            last_index: self.last_index.max(other.last_index),
-        };
+    fn merge_with_right_neighbor(&mut self, rhs: Self) {
+        self.last_index = rhs.last_index;
+    }
+}
+
+impl IsRange for SourceId {
+    fn is_left_neighbor_of(&self, other: &Self) -> bool {
+        self.range.is_left_neighbor_of(&other.range)
+    }
+
+    fn merge_with_right_neighbor(&mut self, rhs: Self) {
+        self.range.merge_with_right_neighbor(rhs.range);
+        if self.type_is != rhs.type_is {
+            self.type_is = "_";
+        }
+    }
+}
+
+impl IsRange for CpuUpdate {
+    fn is_left_neighbor_of(&self, other: &Self) -> bool {
+        self.range.is_left_neighbor_of(&other.range)
+    }
+
+    fn merge_with_right_neighbor(&mut self, rhs: Self) {
+        self.range.merge_with_right_neighbor(rhs.range);
+        self.data.extend(rhs.data);
     }
 }
 
 impl IsRange for SlabUpdate {
-    fn should_merge_with(&self, other: &Self) -> bool {
+    fn is_left_neighbor_of(&self, other: &Self) -> bool {
         self.intersects(other)
     }
 
-    fn union(&mut self, other: Self) {
-        if self.array == other.array {
-            *self = other;
+    fn merge_with_right_neighbor(&mut self, rhs: Self) {
+        if self.array == rhs.array {
+            *self = rhs;
             return;
         }
 
-        let mut array = self.array;
-        array.union(&other.array);
-
-        let mut elements = vec![0u32; array.len()];
-
-        let self_index = self.array.id.index() - array.id.index();
-        elements.write_indexed_slice(&self.elements, self_index);
-        let other_index = other.array.id.index() - array.id.index();
-        elements.write_indexed_slice(&other.elements, other_index);
-
-        self.array = array;
-        self.elements = elements;
+        self.array.union(&rhs.array);
+        self.elements.extend(rhs.elements);
     }
 }
 
@@ -102,6 +125,14 @@ pub struct RangeManager<R> {
 impl<R> Default for RangeManager<R> {
     fn default() -> Self {
         Self { ranges: vec![] }
+    }
+}
+
+impl<R: core::fmt::Debug> core::fmt::Debug for RangeManager<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(&format!("RangeManager<{}>", std::any::type_name::<R>()))
+            .field("ranges", &self.ranges)
+            .finish()
     }
 }
 
@@ -118,12 +149,25 @@ impl<R: IsRange> RangeManager<R> {
 
     pub fn add_range(&mut self, input_range: R) {
         for range in self.ranges.iter_mut() {
-            if range.should_merge_with(&input_range) {
-                range.union(input_range);
+            if range.is_left_neighbor_of(&input_range) {
+                range.merge_with_right_neighbor(input_range);
+                return;
+            }
+            if input_range.is_left_neighbor_of(range) {
+                let rhs = std::mem::replace(range, input_range);
+                range.merge_with_right_neighbor(rhs);
                 return;
             }
         }
         self.ranges.push(input_range);
+    }
+
+    pub fn defrag(self) -> Self {
+        let mut defragged = Self::default();
+        for range in self.ranges.into_iter() {
+            defragged.add_range(range);
+        }
+        defragged
     }
 }
 

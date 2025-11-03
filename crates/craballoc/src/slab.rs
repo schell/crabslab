@@ -5,7 +5,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use snafu::prelude::*;
 use std::{
     borrow::Cow,
-    hash::Hash,
     num::NonZeroU32,
     ops::Deref,
     sync::{Arc, RwLock},
@@ -15,6 +14,7 @@ use crate::{
     buffer::{manager::BufferManager, SlabBuffer},
     range::{Range, RangeManager},
     runtime::{IsRuntime, SlabUpdate},
+    update::SourceId,
     value::{Hybrid, HybridArray, WeakGpuRef},
 };
 
@@ -45,47 +45,6 @@ pub enum SlabAllocatorError {
     Other { source: Box<dyn std::error::Error> },
 }
 
-/// An identifier for a unique source of updates.
-#[derive(Clone, Copy, Debug)]
-pub struct SourceId {
-    pub key: usize,
-    /// This field is just for debugging.
-    pub type_is: &'static str,
-}
-
-impl core::fmt::Display for SourceId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}({})", self.type_is, self.key))
-    }
-}
-
-impl PartialEq for SourceId {
-    fn eq(&self, other: &Self) -> bool {
-        self.key.eq(&other.key)
-    }
-}
-
-impl Eq for SourceId {}
-
-#[allow(clippy::non_canonical_partial_ord_impl)]
-impl PartialOrd for SourceId {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.key.cmp(&other.key))
-    }
-}
-
-impl Ord for SourceId {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.key.cmp(&other.key)
-    }
-}
-
-impl Hash for SourceId {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.key.hash(state)
-    }
-}
-
 /// Manages slab allocations and updates over a parameterised buffer.
 ///
 /// Create a new instance using [`SlabAllocator::new`].
@@ -100,8 +59,6 @@ pub struct SlabAllocator<Runtime: IsRuntime> {
     ),
     buffer_manager: BufferManager<Runtime>,
 
-    // The next monotonically increasing update identifier
-    pub(crate) update_k: Arc<AtomicUsize>,
     // Weak references to all values that can write updates into this slab
     pub(crate) update_sources: Arc<RwLock<FxHashMap<SourceId, WeakGpuRef>>>,
     // Set of ids of the update sources that have updates queued
@@ -115,7 +72,6 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
         SlabAllocator {
             notifier: self.notifier.clone(),
             buffer_manager: self.buffer_manager.clone(),
-            update_k: self.update_k.clone(),
             update_sources: self.update_sources.clone(),
             update_queue: self.update_queue.clone(),
             recycles: self.recycles.clone(),
@@ -140,16 +96,11 @@ impl<R: IsRuntime> SlabAllocator<R> {
         log::debug!("new slab allocator");
         Self {
             notifier: async_channel::unbounded(),
-            update_k: Default::default(),
             update_sources: Default::default(),
             update_queue: Default::default(),
             recycles: Default::default(),
             buffer_manager: BufferManager::new(runtime, name, default_buffer_usages),
         }
-    }
-
-    pub(crate) fn next_update_k(&self) -> usize {
-        self.update_k.fetch_add(1, Ordering::Relaxed)
     }
 
     pub(crate) fn insert_update_source(&self, id: SourceId, source: WeakGpuRef) {
