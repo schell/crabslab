@@ -1,21 +1,20 @@
 //! Slab allocators that run on the CPU.
-use core::sync::atomic::{AtomicUsize, Ordering};
 use crabslab::{Array, Id, SlabItem};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use snafu::prelude::*;
 use std::{
     borrow::Cow,
-    hash::Hash,
     num::NonZeroU32,
     ops::Deref,
     sync::{Arc, RwLock},
 };
 
 use crate::{
-    buffer::{manager::BufferManager, SlabBuffer},
+    buffer::{manager::BumpAllocator, SlabBuffer},
     range::{Range, RangeManager},
-    runtime::{IsRuntime, SlabUpdate},
-    value::{Hybrid, HybridArray, WeakGpuRef},
+    runtime::IsRuntime,
+    update::{SourceId, Update, UpdateManager},
+    value::{Hybrid, HybridArray},
 };
 
 #[cfg(feature = "wgpu")]
@@ -45,47 +44,6 @@ pub enum SlabAllocatorError {
     Other { source: Box<dyn std::error::Error> },
 }
 
-/// An identifier for a unique source of updates.
-#[derive(Clone, Copy, Debug)]
-pub struct SourceId {
-    pub key: usize,
-    /// This field is just for debugging.
-    pub type_is: &'static str,
-}
-
-impl core::fmt::Display for SourceId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}({})", self.type_is, self.key))
-    }
-}
-
-impl PartialEq for SourceId {
-    fn eq(&self, other: &Self) -> bool {
-        self.key.eq(&other.key)
-    }
-}
-
-impl Eq for SourceId {}
-
-#[allow(clippy::non_canonical_partial_ord_impl)]
-impl PartialOrd for SourceId {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.key.cmp(&other.key))
-    }
-}
-
-impl Ord for SourceId {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.key.cmp(&other.key)
-    }
-}
-
-impl Hash for SourceId {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.key.hash(state)
-    }
-}
-
 /// Manages slab allocations and updates over a parameterised buffer.
 ///
 /// Create a new instance using [`SlabAllocator::new`].
@@ -98,14 +56,9 @@ pub struct SlabAllocator<Runtime: IsRuntime> {
         async_channel::Sender<SourceId>,
         async_channel::Receiver<SourceId>,
     ),
-    buffer_manager: BufferManager<Runtime>,
+    bump_allocator: BumpAllocator<Runtime>,
+    update_manager: UpdateManager,
 
-    // The next monotonically increasing update identifier
-    pub(crate) update_k: Arc<AtomicUsize>,
-    // Weak references to all values that can write updates into this slab
-    pub(crate) update_sources: Arc<RwLock<FxHashMap<SourceId, WeakGpuRef>>>,
-    // Set of ids of the update sources that have updates queued
-    update_queue: Arc<RwLock<FxHashSet<SourceId>>>,
     // Recycled memory ranges
     pub(crate) recycles: Arc<RwLock<RangeManager<Range>>>,
 }
@@ -114,20 +67,18 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
     fn clone(&self) -> Self {
         SlabAllocator {
             notifier: self.notifier.clone(),
-            buffer_manager: self.buffer_manager.clone(),
-            update_k: self.update_k.clone(),
-            update_sources: self.update_sources.clone(),
-            update_queue: self.update_queue.clone(),
+            bump_allocator: self.bump_allocator.clone(),
+            update_manager: self.update_manager.clone(),
             recycles: self.recycles.clone(),
         }
     }
 }
 
 impl<R: IsRuntime> Deref for SlabAllocator<R> {
-    type Target = BufferManager<R>;
+    type Target = BumpAllocator<R>;
 
     fn deref(&self) -> &Self::Target {
-        &self.buffer_manager
+        &self.bump_allocator
     }
 }
 
@@ -140,30 +91,17 @@ impl<R: IsRuntime> SlabAllocator<R> {
         log::debug!("new slab allocator");
         Self {
             notifier: async_channel::unbounded(),
-            update_k: Default::default(),
-            update_sources: Default::default(),
-            update_queue: Default::default(),
             recycles: Default::default(),
-            buffer_manager: BufferManager::new(runtime, name, default_buffer_usages),
+            bump_allocator: BumpAllocator::new(runtime, name, default_buffer_usages),
+            update_manager: UpdateManager::default(),
         }
-    }
-
-    pub(crate) fn next_update_k(&self) -> usize {
-        self.update_k.fetch_add(1, Ordering::Relaxed)
-    }
-
-    pub(crate) fn insert_update_source(&self, id: SourceId, source: WeakGpuRef) {
-        log::trace!("{} insert_update_source {id}", self.buffer_manager.label());
-        let _ = self.notifier.0.try_send(id);
-        // UNWRAP: panic on purpose
-        self.update_sources.write().unwrap().insert(id, source);
     }
 
     /// Whether the underlying buffer is empty.
     ///
     /// This does not include data that has not yet been committed.
     pub fn is_empty(&self) -> bool {
-        self.buffer_manager.is_empty()
+        self.bump_allocator.is_empty()
     }
 
     pub(crate) fn allocate<T: SlabItem>(&self) -> Id<T> {
@@ -181,7 +119,7 @@ impl<R: IsRuntime> SlabAllocator<R> {
             );
             id
         } else if let Some(spaces) = NonZeroU32::new(T::SLAB_SIZE as u32) {
-            let range = self.buffer_manager.alloc(spaces);
+            let range = self.bump_allocator.alloc(spaces);
             Id::new(range.first_index)
         } else {
             Id::NONE
@@ -211,7 +149,7 @@ impl<R: IsRuntime> SlabAllocator<R> {
             );
             array
         } else if let Some(spaces) = NonZeroU32::new(T::SLAB_SIZE as u32 * len as u32) {
-            let range = self.buffer_manager.alloc(spaces);
+            let range = self.bump_allocator.alloc(spaces);
             Array::new(Id::new(range.first_index), len as u32)
         } else {
             Array::NONE
@@ -231,83 +169,20 @@ impl<R: IsRuntime> SlabAllocator<R> {
         HybridArray::new(self, values)
     }
 
-    /// Return the ids of all sources that require updating.
-    pub fn get_updated_source_ids(&self) -> FxHashSet<SourceId> {
-        // UNWRAP: panic on purpose
-        let mut update_set = self.update_queue.write().unwrap();
-        while let Ok(source_id) = self.notifier.1.try_recv() {
-            update_set.insert(source_id);
-        }
-        update_set.clone()
+    /// Return the `SourceId`s of all live values allocated by this slab.
+    pub fn get_live_source_ids(&self) -> FxHashSet<SourceId> {
+        self.update_manager.get_managed_source_ids()
     }
 
-    /// Build the set of sources that require updates, draining the source
-    /// notifier and resetting the stored `update_queue`.
-    ///
-    /// This also places recycled items into the recycle bin.
-    fn drain_updated_sources(&self) -> RangeManager<SlabUpdate> {
-        let update_set = self.get_updated_source_ids();
-        // UNWRAP: panic on purpose
-        *self.update_queue.write().unwrap() = Default::default();
-        // Prepare all of our GPU buffer writes
-        let mut writes = RangeManager::<SlabUpdate>::default();
-        {
-            // Recycle any update sources that are no longer needed, and collect the active
-            // sources' updates into `writes`.
-            let mut updates_guard = self.update_sources.write().unwrap();
-            let mut recycles_guard = self.recycles.write().unwrap();
-            for id in update_set {
-                let delete = if let Some(gpu_ref) = updates_guard.get_mut(&id) {
-                    let count = gpu_ref.weak.strong_count();
-                    if count == 0 {
-                        // recycle this allocation
-                        let array = gpu_ref.u32_array;
-                        log::debug!(
-                            "{} drain_updated_sources: recycling {id} {array:?}",
-                            self.buffer_manager.label()
-                        );
-                        if array.is_null() {
-                            log::debug!("  cannot recycle, null");
-                        } else if array.is_empty() {
-                            log::debug!("  cannot recycle, empty");
-                        } else {
-                            recycles_guard.add_range(gpu_ref.u32_array.into());
-                        }
-                        true
-                    } else {
-                        gpu_ref.get_update().into_iter().flatten().for_each(|u| {
-                            log::trace!("updating {id} {:?}", u.array);
-                            writes.add_range(u)
-                        });
-                        false
-                    }
-                } else {
-                    log::debug!("could not find {id}");
-                    false
-                };
-                if delete {
-                    let _ = updates_guard.remove(&id);
-                }
-            }
-            // Defrag the recycle ranges
-            let ranges = std::mem::take(&mut recycles_guard.ranges);
-            let num_ranges_to_defrag = ranges.len();
-            for range in ranges.into_iter() {
-                recycles_guard.add_range(range);
-            }
-            let num_ranges = recycles_guard.ranges.len();
-            if num_ranges < num_ranges_to_defrag {
-                log::trace!("{num_ranges_to_defrag} ranges before, {num_ranges} after");
-            }
-        }
-
-        writes
+    /// Return the ids of all sources that require updating.
+    pub fn get_updated_source_ids(&self) -> FxHashSet<SourceId> {
+        self.update_manager.get_updated_source_ids()
     }
 
     /// Returns whether any update sources, most likely from [`Hybrid`] or [`Gpu`](crate::value::Gpu) values,
     /// have queued updates waiting to be committed.
     pub fn has_queued_updates(&self) -> bool {
-        !self.notifier.1.is_empty() || !self.update_queue.read().unwrap().is_empty()
+        self.update_manager.has_queued_updates()
     }
 
     /// Defragments the internal "recycle" buffer.
@@ -331,13 +206,21 @@ impl<R: IsRuntime> SlabAllocator<R> {
     /// Returns a [`SlabBuffer`] wrapping the internal buffer that is currently
     /// in use by the allocator.
     pub fn commit(&self) -> SlabBuffer<R::Buffer> {
-        let buffer = self.buffer_manager.commit();
+        let buffer = self.bump_allocator.commit();
+        let summary = self.update_manager.clear_updated_sources();
 
-        let writes = self.drain_updated_sources();
-        if !writes.is_empty() {
-            self.buffer_manager
+        {
+            // Add the dropped sources bay to the recycle pool
+            let mut guard = self.recycles.write().unwrap();
+            for source_id in summary.recycle_ranges.ranges {
+                guard.add_range(source_id.range);
+            }
+        }
+
+        for Update { range, data } in summary.cpu_update_ranges.ranges {
+            self.bump_allocator
                 .runtime()
-                .buffer_write(writes.ranges.into_iter(), &buffer);
+                .buffer_write(&buffer, range.into(), &data);
         }
 
         buffer

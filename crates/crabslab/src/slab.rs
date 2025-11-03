@@ -22,6 +22,16 @@ pub trait SlabItem: core::any::Any + Sized {
     /// If the type cannot be written, the returned index will be equal
     /// to `index`.
     fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize;
+
+    #[cfg(not(target_arch = "spirv"))]
+    /// Return a vector copy of this value's slab data.
+    ///
+    /// Only available on CPU.
+    fn slab_data(&self) -> Vec<u32> {
+        let mut data = vec![0u32; Self::SLAB_SIZE];
+        self.write_slab(0, &mut data);
+        data
+    }
 }
 
 /// Trait for slabs of `u32`s that can store many types.

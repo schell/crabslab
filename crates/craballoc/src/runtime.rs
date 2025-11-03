@@ -3,33 +3,13 @@
 use std::{
     future::Future,
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 
-use crabslab::Array;
 use snafu::ResultExt;
 use tracing::Instrument;
 
-use crate::slab::{AsyncRecvSnafu, AsyncSnafu, PollSnafu, SlabAllocatorError};
-
-/// An update to a slab.
-///
-/// This is a write that can be serialized for later syncronization.
-#[derive(Clone, Debug)]
-pub struct SlabUpdate {
-    pub array: Array<u32>,
-    pub elements: Vec<u32>,
-}
-
-impl SlabUpdate {
-    pub fn intersects(&self, other: &Self) -> bool {
-        let here_start = self.array.id;
-        let there_start = other.array.id;
-        let here_end = self.array.id + self.array.len;
-        let there_end = other.array.id + other.array.len;
-        !(here_start >= there_end || there_start >= here_end)
-    }
-}
+use crate::{AsyncRecvSnafu, AsyncSnafu, Error, PollSnafu};
 
 /// Represents the runtime that provides the interface to the GPU buffer.
 ///
@@ -59,8 +39,8 @@ pub trait IsRuntime: Clone {
         label: Option<&str>,
     );
 
-    /// Write the updates into the given buffer.
-    fn buffer_write<U: Iterator<Item = SlabUpdate>>(&self, updates: U, buffer: &Self::Buffer);
+    /// Write the given u32 items into the given buffer at the given range.
+    fn buffer_write(&self, buffer: &Self::Buffer, range: std::ops::Range<usize>, items: &[u32]);
 
     /// Read the range from the given buffer.
     ///
@@ -71,7 +51,7 @@ pub trait IsRuntime: Clone {
         buffer: &Self::Buffer,
         buffer_len: usize,
         range: impl std::ops::RangeBounds<usize>,
-    ) -> impl Future<Output = Result<Vec<u32>, SlabAllocatorError>>;
+    ) -> impl Future<Output = Result<Vec<u32>, Error>>;
 }
 
 pub(crate) fn range_to_indices_and_len(
@@ -149,14 +129,11 @@ impl IsRuntime for CpuRuntime {
         destination_slice.copy_from_slice(source.as_slice());
     }
 
-    fn buffer_write<U: Iterator<Item = SlabUpdate>>(&self, updates: U, buffer: &Self::Buffer) {
+    fn buffer_write(&self, buffer: &Self::Buffer, range: std::ops::Range<usize>, items: &[u32]) {
         let mut guard = buffer.inner.write().unwrap();
-        log::trace!("writing to vec len:{}", guard.len());
-        for SlabUpdate { array, elements } in updates {
-            log::trace!("array: {array:?} elements: {elements:?}");
-            let slice = &mut guard[array.starting_index()..array.starting_index() + array.len()];
-            slice.copy_from_slice(&elements);
-        }
+        log::trace!("writing to range {range:?} elements {items:?}");
+        let slice = &mut guard[range];
+        slice.copy_from_slice(items);
     }
 
     async fn buffer_read(
@@ -164,7 +141,7 @@ impl IsRuntime for CpuRuntime {
         buffer: &Self::Buffer,
         buffer_len: usize,
         range: impl std::ops::RangeBounds<usize>,
-    ) -> Result<Vec<u32>, SlabAllocatorError> {
+    ) -> Result<Vec<u32>, Error> {
         let v = buffer.inner.read().unwrap();
         debug_assert_eq!(v.len(), buffer_len);
         let (start, end, len) = range_to_indices_and_len(v.len(), range);
@@ -194,12 +171,10 @@ impl IsRuntime for WgpuRuntime {
     type Buffer = wgpu::Buffer;
     type BufferUsages = wgpu::BufferUsages;
 
-    fn buffer_write<U: Iterator<Item = SlabUpdate>>(&self, updates: U, buffer: &Self::Buffer) {
-        for SlabUpdate { array, elements } in updates {
-            let offset = array.starting_index() as u64 * std::mem::size_of::<u32>() as u64;
-            self.queue
-                .write_buffer(buffer, offset, bytemuck::cast_slice(&elements));
-        }
+    fn buffer_write(&self, buffer: &Self::Buffer, range: std::ops::Range<usize>, items: &[u32]) {
+        let byte_offset = range.start as u64 * std::mem::size_of::<u32>() as u64;
+        self.queue
+            .write_buffer(buffer, byte_offset, bytemuck::cast_slice(items));
         self.queue.submit(std::iter::empty());
     }
 
@@ -246,7 +221,7 @@ impl IsRuntime for WgpuRuntime {
         buffer: &Self::Buffer,
         buffer_len: usize,
         range: impl std::ops::RangeBounds<usize>,
-    ) -> Result<Vec<u32>, SlabAllocatorError> {
+    ) -> Result<Vec<u32>, Error> {
         let (start, _end, len) = crate::runtime::range_to_indices_and_len(buffer_len, range);
         let byte_offset = start * std::mem::size_of::<u32>();
         let length = len * std::mem::size_of::<u32>();
