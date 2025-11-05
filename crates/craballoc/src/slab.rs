@@ -7,11 +7,12 @@ use std::{
     borrow::Cow,
     num::NonZeroU32,
     ops::Deref,
+    rc::Rc,
     sync::{Arc, RwLock},
 };
 
 use crate::{
-    buffer::{manager::BufferManager, SlabBuffer},
+    buffer::{manager::BumpAllocator, SlabBuffer},
     range::{Range, RangeManager},
     runtime::{IsRuntime, SlabUpdate},
     update::SourceId,
@@ -57,7 +58,7 @@ pub struct SlabAllocator<Runtime: IsRuntime> {
         async_channel::Sender<SourceId>,
         async_channel::Receiver<SourceId>,
     ),
-    buffer_manager: BufferManager<Runtime>,
+    bump_allocator: BumpAllocator<Runtime>,
 
     // Weak references to all values that can write updates into this slab
     pub(crate) update_sources: Arc<RwLock<FxHashMap<SourceId, WeakGpuRef>>>,
@@ -71,7 +72,7 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
     fn clone(&self) -> Self {
         SlabAllocator {
             notifier: self.notifier.clone(),
-            buffer_manager: self.buffer_manager.clone(),
+            bump_allocator: self.bump_allocator.clone(),
             update_sources: self.update_sources.clone(),
             update_queue: self.update_queue.clone(),
             recycles: self.recycles.clone(),
@@ -80,10 +81,10 @@ impl<R: IsRuntime> Clone for SlabAllocator<R> {
 }
 
 impl<R: IsRuntime> Deref for SlabAllocator<R> {
-    type Target = BufferManager<R>;
+    type Target = BumpAllocator<R>;
 
     fn deref(&self) -> &Self::Target {
-        &self.buffer_manager
+        &self.bump_allocator
     }
 }
 
@@ -99,12 +100,12 @@ impl<R: IsRuntime> SlabAllocator<R> {
             update_sources: Default::default(),
             update_queue: Default::default(),
             recycles: Default::default(),
-            buffer_manager: BufferManager::new(runtime, name, default_buffer_usages),
+            bump_allocator: BumpAllocator::new(runtime, name, default_buffer_usages),
         }
     }
 
     pub(crate) fn insert_update_source(&self, id: SourceId, source: WeakGpuRef) {
-        log::trace!("{} insert_update_source {id}", self.buffer_manager.label());
+        log::trace!("{} insert_update_source {id}", self.bump_allocator.label());
         let _ = self.notifier.0.try_send(id);
         // UNWRAP: panic on purpose
         self.update_sources.write().unwrap().insert(id, source);
@@ -114,7 +115,7 @@ impl<R: IsRuntime> SlabAllocator<R> {
     ///
     /// This does not include data that has not yet been committed.
     pub fn is_empty(&self) -> bool {
-        self.buffer_manager.is_empty()
+        self.bump_allocator.is_empty()
     }
 
     pub(crate) fn allocate<T: SlabItem>(&self) -> Id<T> {
@@ -132,7 +133,7 @@ impl<R: IsRuntime> SlabAllocator<R> {
             );
             id
         } else if let Some(spaces) = NonZeroU32::new(T::SLAB_SIZE as u32) {
-            let range = self.buffer_manager.alloc(spaces);
+            let range = self.bump_allocator.alloc(spaces);
             Id::new(range.first_index)
         } else {
             Id::NONE
@@ -162,7 +163,7 @@ impl<R: IsRuntime> SlabAllocator<R> {
             );
             array
         } else if let Some(spaces) = NonZeroU32::new(T::SLAB_SIZE as u32 * len as u32) {
-            let range = self.buffer_manager.alloc(spaces);
+            let range = self.bump_allocator.alloc(spaces);
             Array::new(Id::new(range.first_index), len as u32)
         } else {
             Array::NONE
@@ -215,7 +216,7 @@ impl<R: IsRuntime> SlabAllocator<R> {
                         let array = gpu_ref.u32_array;
                         log::debug!(
                             "{} drain_updated_sources: recycling {id} {array:?}",
-                            self.buffer_manager.label()
+                            self.bump_allocator.label()
                         );
                         if array.is_null() {
                             log::debug!("  cannot recycle, null");
@@ -282,13 +283,14 @@ impl<R: IsRuntime> SlabAllocator<R> {
     /// Returns a [`SlabBuffer`] wrapping the internal buffer that is currently
     /// in use by the allocator.
     pub fn commit(&self) -> SlabBuffer<R::Buffer> {
-        let buffer = self.buffer_manager.commit();
+        let buffer = self.bump_allocator.commit();
 
         let writes = self.drain_updated_sources();
-        if !writes.is_empty() {
-            self.buffer_manager
+        for SlabUpdate { array, elements } in writes.ranges.into_iter() {
+            let range = array.starting_index()..array.starting_index() + array.len();
+            self.bump_allocator
                 .runtime()
-                .buffer_write(writes.ranges.into_iter(), &buffer);
+                .buffer_write(&buffer, range, &elements);
         }
 
         buffer

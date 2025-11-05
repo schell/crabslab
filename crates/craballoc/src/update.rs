@@ -34,12 +34,31 @@ impl core::fmt::Display for SourceId {
     }
 }
 
-/// Held internally by the `CpuUpdateManager` and checked for updated data
-/// when it receives a `SourceId` during a commit phase.
+#[derive(Default)]
+pub struct SynchronizationData {
+    cpu_updated: bool,
+    gpu_update_requested: bool,
+    data: Vec<u32>,
+}
+
+impl SynchronizationData {
+    pub fn new(len: usize) -> Self {
+        Self {
+            cpu_updated: true,
+            gpu_update_requested: false,
+            data: vec![0u32; len],
+        }
+    }
+}
+
+/// Data shared between `UpdateManager` and userland code.
+///
+/// Held internally by the `UpdateManager` and checked for updated data
+/// when `UpdateManager` receives a `SourceId` during a commit phase.
 #[derive(Clone)]
 #[repr(transparent)]
 pub struct CpuData {
-    pub data: Weak<RwLock<Vec<u32>>>,
+    pub synchronization: Weak<RwLock<SynchronizationData>>,
 }
 
 /// Held externally by allocated values.
@@ -47,48 +66,86 @@ pub struct CpuData {
 /// This struct is used to communicate updates from userland values that
 /// have been allocated, to the inner update machinery that ultimately sends
 /// this data to the GPU.
+///
+/// It also provides a mechanism to request that an update from the GPU to this
+/// value be performed during commit.
 #[derive(Clone)]
 pub struct CpuUpdateSource {
     source: SourceId,
     sender: async_channel::Sender<SourceId>,
-    data: Arc<RwLock<Vec<u32>>>,
+    data: Arc<RwLock<SynchronizationData>>,
 }
 
 impl CpuUpdateSource {
     pub fn cpu_data(&self) -> CpuData {
         CpuData {
-            data: Arc::downgrade(&self.data),
+            synchronization: Arc::downgrade(&self.data),
         }
     }
 
+    /// Read the inner data, if any, returning `T`.
+    ///
+    /// In the case this `CpuUpdateSource` represents a [`OneWayFromGpu`](crate::arena::OneWayFromGpu)
+    /// value, the slice provided to the given closure will be empty.
     pub fn read<T>(&self, f: impl FnOnce(&[u32]) -> T) -> T {
         let guard = self.data.read().unwrap();
-        f(&guard)
+        f(&guard.data)
     }
 
+    /// Modify the inner data, if any, returning `T`.
+    ///
+    /// In the case this `CpuUpdateSource` represents a [`OneWayFromGpu`](crate::arena::OneWayFromGpu)
+    /// value, the slice provided to the given closure will be empty.
+    ///
+    /// This marks the data as updated, which will cause the data to be sent to the GPU
+    /// on the next commit.
     pub fn modify<T>(&self, f: impl FnOnce(&mut [u32]) -> T) -> T {
         let mut guard = self.data.write().unwrap();
-        let t = f(&mut guard);
+        let t = f(&mut guard.data);
+        guard.cpu_updated = true;
         // UNWRAP: safe because this channel is unbounded
         self.sender.try_send(self.source).unwrap();
         t
     }
+
+    /// Request that the next commit synchronize this source with the data from the GPU.
+    pub fn request_gpu_sync(&self) {
+        self.data.write().unwrap().gpu_update_requested = true;
+    }
+
+    /// A null update source that performs no updates.
+    ///
+    /// Updates made to this source will fall into the void.
+    pub fn null() -> Self {
+        CpuUpdateSource {
+            source: SourceId {
+                range: Range {
+                    first_index: u32::MAX,
+                    last_index: u32::MAX,
+                },
+                type_is: "_",
+            },
+            sender: async_channel::bounded(1).0,
+            data: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone)]
-pub struct CpuUpdate {
+pub struct Update {
     pub range: Range,
     pub data: Vec<u32>,
 }
 
-pub struct CpuUpdateSummary {
-    pub update_ranges: RangeManager<CpuUpdate>,
+pub struct UpdateSummary {
+    pub cpu_update_ranges: RangeManager<Update>,
+    pub gpu_update_ranges: RangeManager<Range>,
     pub recycle_ranges: RangeManager<SourceId>,
 }
 
-/// An abstraction over updates made from the CPU.
+/// Manages updates to and from the CPU.
 #[derive(Clone)]
-pub struct CpuUpdateManager {
+pub struct UpdateManager {
     /// Sends notification of an update at the time of update.
     notifier_sender: async_channel::Sender<SourceId>,
     /// Receives update notifications during a commit.
@@ -100,7 +157,22 @@ pub struct CpuUpdateManager {
     update_queue: Arc<RwLock<FxHashSet<SourceId>>>,
 }
 
-impl Default for CpuUpdateManager {
+impl std::fmt::Debug for UpdateManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CpuUpdateManager")
+            .field(
+                "update_sources_count",
+                &self.update_sources.read().unwrap().len(),
+            )
+            .field(
+                "update_queue_count",
+                &self.update_queue.read().unwrap().len(),
+            )
+            .finish()
+    }
+}
+
+impl Default for UpdateManager {
     fn default() -> Self {
         let (tx, rx) = async_channel::unbounded();
         Self {
@@ -112,13 +184,15 @@ impl Default for CpuUpdateManager {
     }
 }
 
-impl CpuUpdateManager {
+impl UpdateManager {
     /// Create a new update source.
     pub fn new_update_source(&self, source: SourceId) -> CpuUpdateSource {
         let update_source = CpuUpdateSource {
             source,
             sender: self.notifier_sender.clone(),
-            data: Arc::new(RwLock::new(vec![0u32; source.range.len() as usize])),
+            data: Arc::new(RwLock::new(SynchronizationData::new(
+                source.range.len() as usize
+            ))),
         };
         let cpu_data = update_source.cpu_data();
         self.update_sources
@@ -142,8 +216,9 @@ impl CpuUpdateManager {
     ///
     /// This ensures that an entire frame of updates is coalesced into the smallest
     /// number of buffer writes as is possible.
-    pub fn clear_updated_sources(&self) -> CpuUpdateSummary {
-        let mut update_ranges = RangeManager::<CpuUpdate>::default();
+    pub fn clear_updated_sources(&self) -> UpdateSummary {
+        let mut cpu_update_ranges = RangeManager::<Update>::default();
+        let mut gpu_update_ranges = RangeManager::<Range>::default();
         let mut recycle_ranges = RangeManager::<SourceId>::default();
 
         let update_source_ids = self.clear_updated_source_ids();
@@ -156,14 +231,22 @@ impl CpuUpdateManager {
             let mut updates_guard = self.update_sources.write().unwrap();
             for id in update_source_ids {
                 if let Some(cpu_data) = updates_guard.get_mut(&id) {
-                    if let Some(data) = cpu_data.data.upgrade() {
+                    if let Some(sync_data) = cpu_data.synchronization.upgrade() {
                         // Userland still holds a reference to this, schedule the update
-                        let update_data = CpuUpdate {
-                            data: data.read().unwrap().clone(),
-                            range: id.range,
-                        };
-                        log::trace!("updating {id}");
-                        update_ranges.add_range(update_data);
+                        let mut sync_data_guard = sync_data.write().unwrap();
+                        if sync_data_guard.cpu_updated {
+                            sync_data_guard.cpu_updated = false;
+                            let update_data = Update {
+                                data: sync_data_guard.data.clone(),
+                                range: id.range,
+                            };
+                            log::trace!("updating {id} from CPU");
+                            cpu_update_ranges.add_range(update_data);
+                        }
+                        if sync_data_guard.gpu_update_requested {
+                            sync_data_guard.gpu_update_requested = false;
+                            gpu_update_ranges.add_range(id.range);
+                        }
                     } else {
                         // Recycle this allocation, it has been dropped from userland
                         log::debug!("recycling {id}");
@@ -176,8 +259,9 @@ impl CpuUpdateManager {
             }
         }
 
-        CpuUpdateSummary {
-            update_ranges: update_ranges.defrag(),
+        UpdateSummary {
+            cpu_update_ranges: cpu_update_ranges.defrag(),
+            gpu_update_ranges: gpu_update_ranges.defrag(),
             recycle_ranges: recycle_ranges.defrag(),
         }
     }

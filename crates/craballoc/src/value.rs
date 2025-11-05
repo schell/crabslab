@@ -504,29 +504,32 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
     /// Panics if the range does not fit within the array, or if the item
     /// length is greater than the range.
     pub fn set_items(&self, range: std::ops::Range<usize>, items: &[T]) {
-        let inner = range;
-        let outer = self.array.range();
-        let is_contained = outer.start <= inner.start && outer.end >= inner.end;
+        let end = range.end;
+        let is_contained = end <= self.len();
+        let array_len = self.len();
         assert!(
             is_contained,
-            "range {inner:?} is not contained by GpuArray's range {outer:?}"
+            "range {range:?} would access outside of this GpuArray (length {array_len})"
         );
         let len = items.len();
-        let range_len = inner.end - inner.start;
+        let range_len = range.end - range.start;
         assert!(
             len <= range_len,
             "length of items {len} is greater than the range provided {range_len}"
         );
-        let mut elements = vec![0u32; T::SLAB_SIZE * len];
-        let array = Array::<T>::new(Id::ZERO, len as u32);
-        for (id, item) in array.iter().zip(items) {
-            elements.write(id, item);
+        let mut data = vec![0u32; T::SLAB_SIZE * len];
+        {
+            // Write the items into the data
+            let array = Array::<T>::new(Id::ZERO, len as u32);
+            for (id, item) in array.iter().zip(items) {
+                data.write(id, item);
+            }
         }
-        let inner_offset = inner.start * T::SLAB_SIZE;
+        let inner_offset = range.start * T::SLAB_SIZE;
         let index = self.array.id.inner() + inner_offset as u32;
         self.updates.lock().unwrap().push(SlabUpdate {
-            array: Array::new(Id::new(index), elements.len() as u32),
-            elements,
+            array: Array::new(Id::new(index), data.len() as u32),
+            elements: data,
         });
         // UNWRAP: safe because it's unbounded
         self.notifier.try_send(self.notifier_index).unwrap();
@@ -766,6 +769,7 @@ mod test {
             assert_eq!(initial_values, &values, "gpu side wrong");
         }
 
+        log::info!("creating the slab");
         let slab = SlabAllocator::new(CpuRuntime, "test", ());
         let mut initial_values = vec![
             Data {
@@ -784,9 +788,12 @@ mod test {
                 int: 3,
             },
         ];
+
+        log::info!("staging initial values");
         let values = slab.new_array(initial_values.clone());
         ensure(&slab, &initial_values, &values);
 
+        log::info!("updating the initial values");
         // change the initial values
         initial_values[1].int = 666;
         initial_values[2].int = 420;
@@ -797,6 +804,7 @@ mod test {
         });
         ensure(&slab, &initial_values, &values);
 
+        log::info!("updating the initial values with overlapping updates");
         // Now ensure that two updates within one commit apply correctly.
         // 1. update an outer range
         // 2. update an inner range

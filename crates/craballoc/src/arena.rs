@@ -8,36 +8,34 @@
 use std::{
     borrow::Cow,
     marker::PhantomData,
+    num::NonZeroU32,
     sync::{Arc, RwLock},
 };
 
-use crabslab::SlabItem;
+use crabslab::{Id, Slab, SlabItem};
 
 #[cfg(doc)]
 use crate::slab::SlabAllocator;
+
 use crate::{
-    buffer::{manager::BufferManager, SlabBuffer},
+    buffer::{manager::BumpAllocator, SlabBuffer},
     range::{Range, RangeManager},
     runtime::IsRuntime,
-    update::{CpuUpdateSource, SourceId},
+    update::{CpuUpdateSource, SourceId, UpdateManager},
 };
 
 /// Value is synchronized on both CPU and GPU.
-pub struct Bidirectional {
-    cpu_update_source: CpuUpdateSource,
-}
+pub struct Bidirectional;
 
 // Value is synchronized from CPU to the GPU, but any changes on the GPU will
 // leave the value out of sync.
-pub struct OneWayFromCpu {
-    cpu_update_source: CpuUpdateSource,
-}
+pub struct OneWayFromCpu;
 
 // Value is synchronized from GPU to CPU but cannot be changed from the CPU.
 pub struct OneWayFromGpu;
 
 pub struct Value<T: SlabItem, Sync = Bidirectional> {
-    sync_source: Sync,
+    update_source: CpuUpdateSource,
     /// A channell to send updates into.
     _phantom: PhantomData<(T, Sync)>,
 }
@@ -48,34 +46,56 @@ pub struct Value<T: SlabItem, Sync = Bidirectional> {
 /// synchronized from the CPU to the GPU and back.
 #[derive(Debug)]
 pub struct Arena<R: IsRuntime> {
-    /// Manages allocation on the slab
-    buffer_manager: BufferManager<R>,
-    /// Manages the ranges that will be synchronized from the CPU to the GPU.
-    cpu_to_gpu_synchronization_ranges: Arc<RwLock<RangeManager<Range>>>,
-    /// Manages the ranges that will be synchronized from the GPU to the CPU.
-    gpu_to_cpu_synchronization_ranges: Arc<RwLock<RangeManager<Range>>>,
+    /// Manages bump allocation on the slab.
+    buffer_manager: BumpAllocator<R>,
+    /// Manages CPU side updates to the slab after allocation.
+    update_manager: UpdateManager,
 }
 
 impl<Runtime: IsRuntime> Clone for Arena<Runtime> {
     fn clone(&self) -> Self {
         Self {
             buffer_manager: self.buffer_manager.clone(),
-            cpu_to_gpu_synchronization_ranges: self.gpu_to_cpu_synchronization_ranges.clone(),
-            gpu_to_cpu_synchronization_ranges: self.cpu_to_gpu_synchronization_ranges.clone(),
+            update_manager: self.update_manager.clone(),
         }
     }
 }
 
 impl<R: IsRuntime> Arena<R> {
+    /// Create a new arena.
     pub fn new(
         runtime: impl AsRef<R>,
         label: impl Into<Cow<'static, str>>,
         default_buffer_usages: R::BufferUsages,
     ) -> Self {
         Self {
-            buffer_manager: BufferManager::new(runtime, label, default_buffer_usages),
-            cpu_to_gpu_synchronization_ranges: Default::default(),
-            gpu_to_cpu_synchronization_ranges: Default::default(),
+            buffer_manager: BumpAllocator::new(runtime, label, default_buffer_usages),
+            update_manager: UpdateManager::default(),
+        }
+    }
+
+    /// Allocate a new value from the arena.
+    ///
+    /// This value has bidirectional synchonization.
+    pub fn new_value<T: SlabItem>(&self, value: T) -> Value<T> {
+        if let Some(spaces) = NonZeroU32::new(T::SLAB_SIZE as u32) {
+            let range = self.buffer_manager.alloc(spaces);
+            let update_source = self.update_manager.new_update_source(SourceId {
+                range,
+                type_is: std::any::type_name::<T>(),
+            });
+            update_source.modify(|data| {
+                data.write(Id::ZERO, &value);
+            });
+            Value {
+                update_source,
+                _phantom: PhantomData,
+            }
+        } else {
+            Value {
+                update_source: CpuUpdateSource::null(),
+                _phantom: PhantomData,
+            }
         }
     }
 }
@@ -87,5 +107,9 @@ mod test {
     #[test]
     fn sanity() {
         let arena = Arena::new(crate::wgpu_runtime(), "tests", wgpu::BufferUsages::empty());
+        let u0 = arena.new_value(0u32);
+        let u1 = arena.new_value(0u32);
+        let u2 = arena.new_value(0u32);
+        let u3 = arena.new_value(0u32);
     }
 }

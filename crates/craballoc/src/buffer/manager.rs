@@ -18,11 +18,11 @@ const ATOMIC_ORDERING: std::sync::atomic::Ordering = std::sync::atomic::Ordering
 
 /// Manages a runtime buffer.
 ///
-/// The `BufferManager` is responsible for allocating contiguous u32 ranges on the
+/// The `BumpAllocator` is responsible for allocating contiguous u32 ranges on the
 /// slab. It maintains a count of the number of u32 slots allocated (the length)
 /// and the number of u32 slots available to be allocated (the capacity).
-/// It automatically resizes the buffer when allocations would overrun the capacity.
-pub struct BufferManager<R: IsRuntime> {
+/// It resizes the buffer during commit when allocations would overrun the capacity.
+pub struct BumpAllocator<R: IsRuntime> {
     label: Arc<Cow<'static, str>>,
 
     runtime: R,
@@ -33,14 +33,13 @@ pub struct BufferManager<R: IsRuntime> {
     buffer_needs_expansion: Arc<AtomicBool>,
     buffer: Arc<RwLock<Option<SlabBuffer<R::Buffer>>>>,
 
-    // The value of invocation_k when the last buffer invalidation happened
-    // TODO: deprecate this usage
-    invalidation_k: Arc<AtomicUsize>,
-    // The next monotonically increasing commit invocation identifier
-    commit_count: Arc<AtomicUsize>,
+    // The `commit_height` when the last buffer invalidation happened
+    buffer_creation_height: Arc<AtomicUsize>,
+    // The next monotonically increasing commit invocation "height"
+    commit_height: Arc<AtomicUsize>,
 }
 
-impl<Runtime: IsRuntime + std::fmt::Debug> std::fmt::Debug for BufferManager<Runtime> {
+impl<Runtime: IsRuntime + std::fmt::Debug> std::fmt::Debug for BumpAllocator<Runtime> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             runtime: _,
@@ -51,8 +50,8 @@ impl<Runtime: IsRuntime + std::fmt::Debug> std::fmt::Debug for BufferManager<Run
             buffer: _,
             buffer_needs_expansion,
 
-            invalidation_k: _,
-            commit_count,
+            buffer_creation_height: _,
+            commit_height: commit_count,
         } = self;
         f.debug_struct("BufferManager")
             .field("label", label)
@@ -67,7 +66,7 @@ impl<Runtime: IsRuntime + std::fmt::Debug> std::fmt::Debug for BufferManager<Run
     }
 }
 
-impl<R: IsRuntime> Clone for BufferManager<R> {
+impl<R: IsRuntime> Clone for BumpAllocator<R> {
     fn clone(&self) -> Self {
         Self {
             runtime: self.runtime.clone(),
@@ -77,13 +76,13 @@ impl<R: IsRuntime> Clone for BufferManager<R> {
             buffer_usages: self.buffer_usages.clone(),
             buffer: self.buffer.clone(),
             buffer_needs_expansion: self.buffer_needs_expansion.clone(),
-            invalidation_k: self.invalidation_k.clone(),
-            commit_count: self.commit_count.clone(),
+            buffer_creation_height: self.buffer_creation_height.clone(),
+            commit_height: self.commit_height.clone(),
         }
     }
 }
 
-impl<R: IsRuntime> BufferManager<R> {
+impl<R: IsRuntime> BumpAllocator<R> {
     pub fn new(
         runtime: impl AsRef<R>,
         label: impl Into<Cow<'static, str>>,
@@ -99,8 +98,8 @@ impl<R: IsRuntime> BufferManager<R> {
             buffer_usages,
             buffer: Arc::new(RwLock::new(None)),
             buffer_needs_expansion: Arc::new(true.into()),
-            invalidation_k: Default::default(),
-            commit_count: Default::default(),
+            buffer_creation_height: Default::default(),
+            commit_height: Default::default(),
         }
     }
 
@@ -182,8 +181,8 @@ impl<R: IsRuntime> BufferManager<R> {
         }
         let slab_buffer = self.create_slab_buffer(
             new_buffer,
-            self.invalidation_k.clone(),
-            self.commit_count.clone(),
+            self.buffer_creation_height.clone(),
+            self.commit_height.clone(),
         );
         *guard = Some(slab_buffer.clone());
         slab_buffer
@@ -241,13 +240,13 @@ impl<R: IsRuntime> BufferManager<R> {
     /// in use by the allocator.
     pub fn commit(&self) -> SlabBuffer<R::Buffer> {
         let invocation_k = self
-            .commit_count
+            .commit_height
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             + 1;
         let buffer = if self.clear_buffer_needs_expansion() {
             log::trace!("buffer '{}' needs expansion", self.label);
             // The previous buffer is invalidated
-            self.invalidation_k
+            self.buffer_creation_height
                 .store(invocation_k, std::sync::atomic::Ordering::Relaxed);
             self.recreate_buffer()
         } else {

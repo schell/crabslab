@@ -159,26 +159,15 @@ impl<T> Array<T> {
         }
     }
 
-    /// Return the range this array occupies.
-    ///
-    /// ## Note
-    /// Keep in mind that this is the range of `T`s that this array occupies,
-    /// not necessarily the u32 slab range of the underlying data.
-    ///
-    /// If you require the u32 slab range that this array occupies, you can
-    /// use `self.into_u32_array().range()`.
-    pub fn range(&self) -> core::ops::Range<usize> {
-        let start = self.id.index();
-        start..(start + self.len())
-    }
-
     #[cfg(not(target_arch = "spirv"))]
     /// Return the slice of the slab that this array represents.
     pub fn sub_slab<'a>(&'a self, slab: &'a [u32]) -> &'a [u32]
     where
         T: SlabItem,
     {
-        let range = self.into_u32_array().range();
+        let u32_array = self.into_u32_array();
+        let start = u32_array.starting_index();
+        let range = start..start + u32_array.len();
         &slab[range]
     }
 }

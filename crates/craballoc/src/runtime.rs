@@ -3,7 +3,7 @@
 use std::{
     future::Future,
     ops::{Deref, DerefMut},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 
 use crabslab::Array;
@@ -59,11 +59,8 @@ pub trait IsRuntime: Clone {
         label: Option<&str>,
     );
 
-    /// Write the updates into the given buffer.
-    ///
-    // TODO: remove SlabUpdate from this, make it more idiomatic with `range: std::ops::Range<u32>`
-    // and `data: &[u32]`.
-    fn buffer_write<U: Iterator<Item = SlabUpdate>>(&self, updates: U, buffer: &Self::Buffer);
+    /// Write the given u32 items into the given buffer at the given range.
+    fn buffer_write(&self, buffer: &Self::Buffer, range: std::ops::Range<usize>, items: &[u32]);
 
     /// Read the range from the given buffer.
     ///
@@ -152,14 +149,11 @@ impl IsRuntime for CpuRuntime {
         destination_slice.copy_from_slice(source.as_slice());
     }
 
-    fn buffer_write<U: Iterator<Item = SlabUpdate>>(&self, updates: U, buffer: &Self::Buffer) {
+    fn buffer_write(&self, buffer: &Self::Buffer, range: std::ops::Range<usize>, items: &[u32]) {
         let mut guard = buffer.inner.write().unwrap();
-        log::trace!("writing to vec len:{}", guard.len());
-        for SlabUpdate { array, elements } in updates {
-            log::trace!("array: {array:?} elements: {elements:?}");
-            let slice = &mut guard[array.starting_index()..array.starting_index() + array.len()];
-            slice.copy_from_slice(&elements);
-        }
+        log::trace!("writing to range {range:?} elements {items:?}");
+        let slice = &mut guard[range];
+        slice.copy_from_slice(items);
     }
 
     async fn buffer_read(
@@ -197,12 +191,10 @@ impl IsRuntime for WgpuRuntime {
     type Buffer = wgpu::Buffer;
     type BufferUsages = wgpu::BufferUsages;
 
-    fn buffer_write<U: Iterator<Item = SlabUpdate>>(&self, updates: U, buffer: &Self::Buffer) {
-        for SlabUpdate { array, elements } in updates {
-            let offset = array.starting_index() as u64 * std::mem::size_of::<u32>() as u64;
-            self.queue
-                .write_buffer(buffer, offset, bytemuck::cast_slice(&elements));
-        }
+    fn buffer_write(&self, buffer: &Self::Buffer, range: std::ops::Range<usize>, items: &[u32]) {
+        let byte_offset = range.start as u64 * std::mem::size_of::<u32>() as u64;
+        self.queue
+            .write_buffer(buffer, byte_offset, bytemuck::cast_slice(items));
         self.queue.submit(std::iter::empty());
     }
 

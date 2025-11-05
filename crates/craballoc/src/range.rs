@@ -4,7 +4,7 @@ use crabslab::{Array, Id, SlabItem};
 
 use crate::{
     runtime::SlabUpdate,
-    update::{CpuUpdate, SourceId},
+    update::{SourceId, Update},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -90,7 +90,7 @@ impl IsRange for SourceId {
     }
 }
 
-impl IsRange for CpuUpdate {
+impl IsRange for Update {
     fn is_left_neighbor_of(&self, other: &Self) -> bool {
         self.range.is_left_neighbor_of(&other.range)
     }
@@ -119,6 +119,11 @@ impl IsRange for SlabUpdate {
 
 /// Manages contiguous ranges.
 pub struct RangeManager<R> {
+    /// The contiguous ranges managed by this manager.
+    ///
+    /// ## Note
+    /// Keep in mind that the ranges within this vector are not guaranteed to
+    /// be sorted.
     pub ranges: Vec<R>,
 }
 
@@ -173,6 +178,9 @@ impl<R: IsRange> RangeManager<R> {
 
 impl RangeManager<Range> {
     /// Removes a range of `count` elements, if possible.
+    ///
+    /// If `Some` was returned, either a `Range` was found that was
+    /// exactly of size `count`, or a `count` spaces was removed from an existing `Range`.
     pub fn remove(&mut self, count: u32) -> Option<Range> {
         let mut remove_index = usize::MAX;
         for (i, range) in self.ranges.iter_mut().enumerate() {
