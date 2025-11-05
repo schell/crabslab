@@ -17,8 +17,8 @@ impl SlabAllocator<WgpuRuntime> {
         range: impl std::ops::RangeBounds<usize>,
     ) -> Result<Vec<u32>, SlabAllocatorError> {
         let internal_buffer = self.get_buffer().context(NoInternalBufferSnafu)?;
-        self.runtime
-            .buffer_read(&internal_buffer, self.len(), range)
+        self.runtime()
+            .buffer_read(&internal_buffer, self.len() as usize, range)
             .await
     }
 
@@ -41,58 +41,37 @@ impl SlabAllocator<WgpuRuntime> {
         array: Array<T>,
     ) -> Result<Vec<T>, SlabAllocatorError> {
         let arr = array.into_u32_array();
-        let range = array.index as usize..(arr.index + arr.len) as usize;
+        let range = array.id.index()..arr.id.index() + arr.len();
         let data = self.read(range).await?;
-        let t_array = Array::new(0, array.len() as u32);
+        let t_array = Array::new(Id::ZERO, array.len() as u32);
         Ok(data.read_vec(t_array))
     }
 
     pub fn device(&self) -> &wgpu::Device {
-        &self.runtime.device
+        &self.runtime().device
     }
 
     pub fn queue(&self) -> &wgpu::Queue {
-        &self.runtime.queue
+        &self.runtime().queue
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crabslab::Array;
+    use crabslab::{Array, Id};
 
     use crate::prelude::*;
 
     #[test]
     fn roundtrips() {
-        let backends = wgpu::Backends::PRIMARY;
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends,
-            ..Default::default()
-        });
-        let adapter = futures_lite::future::block_on(instance.request_adapter(
-            &wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            },
-        ))
-        .unwrap();
-        let (device, queue) = futures_lite::future::block_on(
-            adapter.request_device(&wgpu::DeviceDescriptor::default()),
-        )
-        .unwrap();
-        let runtime = WgpuRuntime {
-            device: device.into(),
-            queue: queue.into(),
-        };
-        let slab = SlabAllocator::new(runtime, "tests", wgpu::BufferUsages::empty());
+        let slab = SlabAllocator::new(crate::wgpu_runtime(), "tests", wgpu::BufferUsages::empty());
         let _a = slab.new_value(0u32);
         let _b = slab.new_value(1u32);
         let _c = slab.new_value(2u32);
         slab.commit();
 
-        let vals =
-            futures_lite::future::block_on(slab.read_array(Array::<u32>::new(0, 3))).unwrap();
+        let vals = futures_lite::future::block_on(slab.read_array(Array::<u32>::new(Id::ZERO, 3)))
+            .unwrap();
         assert_eq!(&[0, 1, 2], vals.as_slice());
     }
 }

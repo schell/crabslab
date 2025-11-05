@@ -23,10 +23,10 @@ pub struct SlabUpdate {
 
 impl SlabUpdate {
     pub fn intersects(&self, other: &Self) -> bool {
-        let here_start = self.array.index;
-        let there_start = other.array.index;
-        let here_end = self.array.index + self.array.len;
-        let there_end = other.array.index + other.array.len;
+        let here_start = self.array.id;
+        let there_start = other.array.id;
+        let here_end = self.array.id + self.array.len;
+        let there_end = other.array.id + other.array.len;
         !(here_start >= there_end || there_start >= here_end)
     }
 }
@@ -60,6 +60,9 @@ pub trait IsRuntime: Clone {
     );
 
     /// Write the updates into the given buffer.
+    ///
+    // TODO: remove SlabUpdate from this, make it more idiomatic with `range: std::ops::Range<u32>`
+    // and `data: &[u32]`.
     fn buffer_write<U: Iterator<Item = SlabUpdate>>(&self, updates: U, buffer: &Self::Buffer);
 
     /// Read the range from the given buffer.

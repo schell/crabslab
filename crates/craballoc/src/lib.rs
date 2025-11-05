@@ -1,9 +1,14 @@
 //! Crafting a tasty slab.
+//!
+//! This crate provides [`Arena`] allocation backed by a `u32` slab.
 #![doc = include_str!("../README.md")]
 
+pub mod arena;
+mod buffer;
 pub mod range;
 pub mod runtime;
 pub mod slab;
+mod update;
 pub mod value;
 
 pub mod prelude {
@@ -18,6 +23,29 @@ pub mod prelude {
 use prelude::crabslab::SlabItem;
 #[cfg(doc)]
 use prelude::*;
+
+#[cfg(all(test, feature = "wgpu"))]
+fn wgpu_runtime() -> crate::runtime::WgpuRuntime {
+    let backends = wgpu::Backends::PRIMARY;
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends,
+        ..Default::default()
+    });
+    let adapter =
+        futures_lite::future::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .unwrap();
+    let (device, queue) =
+        futures_lite::future::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .unwrap();
+    crate::runtime::WgpuRuntime {
+        device: device.into(),
+        queue: queue.into(),
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -93,18 +121,23 @@ mod test {
 
     #[test]
     fn slab_manager_sanity() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
         let m = SlabAllocator::new(CpuRuntime, "sanity", ());
         log::info!("allocating 4 unused u32 slots");
-        let _ = m.allocate::<u32>();
-        let _ = m.allocate::<u32>();
-        let _ = m.allocate::<u32>();
-        let _ = m.allocate::<u32>();
+        let id0 = m.allocate::<u32>();
+        let id1 = m.allocate::<u32>();
+        let id2 = m.allocate::<u32>();
+        let id3 = m.allocate::<u32>();
+        log::info!("{:?}", [id0, id1, id2, id3].map(Range::from));
 
         log::info!("creating 4 update sources");
         let h4 = m.new_value(0u32);
         let h5 = m.new_value(0u32);
         let h6 = m.new_value(0u32);
         let h7 = m.new_value(0u32);
+        assert_eq!(4, m.update_sources.read().unwrap().len());
+
         log::info!("running commit");
         let buffer = m.commit();
         assert!(
@@ -116,8 +149,6 @@ mod test {
         );
         assert!(m.recycles.read().unwrap().ranges.is_empty());
         assert_eq!(4, m.update_sources.read().unwrap().len());
-        let k = m.update_k.load(Ordering::Relaxed);
-        assert_eq!(4, k);
 
         log::info!("dropping 4 update sources");
         drop(h4);
@@ -140,9 +171,6 @@ mod test {
         let h7 = m.new_value(0u32);
         assert!(m.recycles.read().unwrap().ranges.is_empty());
         assert_eq!(4, m.update_sources.read().unwrap().len());
-        let k = m.update_k.load(Ordering::Relaxed);
-        // MAYBE_TODO: recycle "update_k"s instead of incrementing for each new source
-        assert_eq!(8, k);
 
         log::info!("creating one more update source, immediately dropping it and two others");
         let h8 = m.new_value(0u32);
@@ -152,7 +180,6 @@ mod test {
         let _ = m.commit();
         assert_eq!(3, m.recycles.read().unwrap().ranges.len());
         assert_eq!(2, m.update_sources.read().unwrap().len());
-        assert_eq!(9, m.update_k.load(Ordering::Relaxed));
 
         drop(h7);
         drop(h5);
