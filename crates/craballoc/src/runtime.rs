@@ -6,30 +6,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crabslab::Array;
 use snafu::ResultExt;
 use tracing::Instrument;
 
-use crate::slab::{AsyncRecvSnafu, AsyncSnafu, PollSnafu, SlabAllocatorError};
-
-/// An update to a slab.
-///
-/// This is a write that can be serialized for later syncronization.
-#[derive(Clone, Debug)]
-pub struct SlabUpdate {
-    pub array: Array<u32>,
-    pub elements: Vec<u32>,
-}
-
-impl SlabUpdate {
-    pub fn intersects(&self, other: &Self) -> bool {
-        let here_start = self.array.id;
-        let there_start = other.array.id;
-        let here_end = self.array.id + self.array.len;
-        let there_end = other.array.id + other.array.len;
-        !(here_start >= there_end || there_start >= here_end)
-    }
-}
+use crate::{AsyncRecvSnafu, AsyncSnafu, Error, PollSnafu};
 
 /// Represents the runtime that provides the interface to the GPU buffer.
 ///
@@ -71,7 +51,7 @@ pub trait IsRuntime: Clone {
         buffer: &Self::Buffer,
         buffer_len: usize,
         range: impl std::ops::RangeBounds<usize>,
-    ) -> impl Future<Output = Result<Vec<u32>, SlabAllocatorError>>;
+    ) -> impl Future<Output = Result<Vec<u32>, Error>>;
 }
 
 pub(crate) fn range_to_indices_and_len(
@@ -161,7 +141,7 @@ impl IsRuntime for CpuRuntime {
         buffer: &Self::Buffer,
         buffer_len: usize,
         range: impl std::ops::RangeBounds<usize>,
-    ) -> Result<Vec<u32>, SlabAllocatorError> {
+    ) -> Result<Vec<u32>, Error> {
         let v = buffer.inner.read().unwrap();
         debug_assert_eq!(v.len(), buffer_len);
         let (start, end, len) = range_to_indices_and_len(v.len(), range);
@@ -241,7 +221,7 @@ impl IsRuntime for WgpuRuntime {
         buffer: &Self::Buffer,
         buffer_len: usize,
         range: impl std::ops::RangeBounds<usize>,
-    ) -> Result<Vec<u32>, SlabAllocatorError> {
+    ) -> Result<Vec<u32>, Error> {
         let (start, _end, len) = crate::runtime::range_to_indices_and_len(buffer_len, range);
         let byte_offset = start * std::mem::size_of::<u32>();
         let length = len * std::mem::size_of::<u32>();

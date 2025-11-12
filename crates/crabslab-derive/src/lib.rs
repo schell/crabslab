@@ -1,5 +1,5 @@
 //! Provides derive macros for `crabslab`.
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::{
     spanned::Spanned, Data, DataEnum, DataStruct, DeriveInput, Fields, FieldsNamed, FieldsUnnamed,
     Ident, Index, Type, TypeTuple, WhereClause, WherePredicate,
@@ -582,79 +582,4 @@ pub fn impl_slabitem_tuples(input: proc_macro::TokenStream) -> proc_macro::Token
         }
     };
     output.into()
-}
-
-/// Creates a proxy type to implement `IsContainer` for, where `IsContainer::Container`
-/// resolves to _the type being derived_.
-///
-/// That may be a bit confusing. In other words - invoking this derive macro on a type `A`
-/// creates an impl of `IsContainer` for a proxy type `B`, where `B::Container = A`.
-///
-/// ## Attributes:
-/// * **`proxy`** - If present, the generated type will be the argument of this attribute.
-/// * **`skip_proxy_definition`** - If present the generated type will not be defined.
-#[proc_macro_derive(IsContainer, attributes(proxy, skip_proxy_definition, array))]
-pub fn impl_derive_is_container(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input: DeriveInput = syn::parse_macro_input!(input);
-    let ident = input.ident.clone();
-    let proxy = input
-        .attrs
-        .iter()
-        .find_map(|att| {
-            if att.path().is_ident("proxy") {
-                let ident: Ident = att.parse_args().ok()?;
-                Some(ident)
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| format_ident!("{}Container", input.ident));
-    let is_array = input.attrs.iter().any(|att| att.path().is_ident("array"));
-    let (pointer_ty, get_pointer_impl) = if is_array {
-        (
-            quote! {
-                type Pointer<T> = Array<T>;
-            },
-            quote! {
-                fn get_pointer<T>(container: &Self::Container<T>) -> Self::Pointer<T> {
-                    container.array()
-                }
-            },
-        )
-    } else {
-        (
-            quote! {
-                type Pointer<T> = Id<T>;
-            },
-            quote! {
-                fn get_pointer<T>(container: &Self::Container<T>) -> Self::Pointer<T> {
-                    container.id()
-                }
-            },
-        )
-    };
-
-    let should_define_proxy = !input
-        .attrs
-        .iter()
-        .any(|att| att.path().is_ident("skip_proxy_definition"));
-    let proxy_def = if should_define_proxy {
-        quote! {
-            #[derive(Clone, Copy, Debug)]
-            pub struct #proxy;
-        }
-    } else {
-        quote! {}
-    };
-
-    quote! {
-        #proxy_def
-        impl IsContainer for #proxy {
-            type Container<T> = #ident<T>;
-            #pointer_ty
-
-            #get_pointer_impl
-        }
-    }
-    .into()
 }

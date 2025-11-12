@@ -26,3 +26,4 @@ wgpu = { workspace = true, optional = true }
 [dev-dependencies]
 env_logger.workspace = true
 futures-lite.workspace = true
+proptest.workspace = true

@@ -1,161 +1,19 @@
 //! Allocated values.
 
 use std::{
+    marker::PhantomData,
     ops::{Deref, DerefMut},
     sync::{Arc, Mutex, RwLock, RwLockWriteGuard, Weak as WeakStd},
 };
 
-use crabslab::{Array, Id, IsContainer, Slab, SlabItem};
+use crabslab::{Array, Id, Slab, SlabItem};
 
 use crate::{
+    arena::{OneWayFromCpu, Value, ValueWriteGuard},
     runtime::{IsRuntime, SlabUpdate},
     slab::SlabAllocator,
-    update::SourceId,
+    update::{CpuUpdateSource, SourceId},
 };
-
-pub struct WeakGpuRef {
-    pub(crate) u32_array: Array<u32>,
-    pub(crate) weak: WeakStd<Mutex<Vec<SlabUpdate>>>,
-    pub(crate) takes_update: bool,
-}
-
-impl WeakGpuRef {
-    /// Take any queued updates.
-    pub fn get_update(&self) -> Option<Vec<SlabUpdate>> {
-        let strong = self.weak.upgrade()?;
-        let mut guard = strong.lock().unwrap();
-        let updates: Vec<_> = if self.takes_update {
-            std::mem::take(guard.as_mut())
-        } else {
-            guard.clone()
-        };
-
-        if updates.is_empty() {
-            None
-        } else {
-            Some(updates)
-        }
-    }
-
-    fn from_gpu<T: SlabItem>(gpu: &Gpu<T>) -> Self {
-        WeakGpuRef {
-            u32_array: Array::new(Id::new(gpu.id.inner()), T::SLAB_SIZE as u32),
-            weak: Arc::downgrade(&gpu.update),
-            takes_update: true,
-        }
-    }
-
-    fn from_gpu_array<T: SlabItem>(gpu_array: &GpuArray<T>) -> Self {
-        WeakGpuRef {
-            u32_array: gpu_array.array.into_u32_array(),
-            weak: Arc::downgrade(&gpu_array.updates),
-            takes_update: true,
-        }
-    }
-}
-
-#[derive(Debug, IsContainer)]
-pub struct WeakGpu<T> {
-    pub(crate) id: Id<T>,
-    pub(crate) notifier_index: SourceId,
-    pub(crate) notify: async_channel::Sender<SourceId>,
-    pub(crate) update: WeakStd<Mutex<Vec<SlabUpdate>>>,
-}
-
-impl<T> Clone for WeakGpu<T> {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            notifier_index: self.notifier_index,
-            notify: self.notify.clone(),
-            update: self.update.clone(),
-        }
-    }
-}
-
-impl<T> WeakGpu<T> {
-    pub fn id(&self) -> Id<T> {
-        self.id
-    }
-
-    pub fn from_gpu(gpu: &Gpu<T>) -> Self {
-        Self {
-            id: gpu.id,
-            notifier_index: gpu.notifier_index,
-            notify: gpu.notify.clone(),
-            update: Arc::downgrade(&gpu.update),
-        }
-    }
-
-    pub fn upgrade(&self) -> Option<Gpu<T>> {
-        Some(Gpu {
-            id: self.id,
-            notifier_index: self.notifier_index,
-            notify: self.notify.clone(),
-            update: self.update.upgrade()?,
-        })
-    }
-
-    /// A unique identifier.
-    pub fn notifier_index(&self) -> SourceId {
-        self.notifier_index
-    }
-}
-
-/// A hybrid value that holds a non-owning reference
-/// to the underlying data.
-#[derive(Debug, IsContainer)]
-#[proxy(WeakContainer)]
-pub struct WeakHybrid<T> {
-    pub(crate) weak_cpu: WeakStd<RwLock<T>>,
-    pub(crate) weak_gpu: WeakGpu<T>,
-}
-
-impl<T> Clone for WeakHybrid<T> {
-    fn clone(&self) -> Self {
-        Self {
-            weak_cpu: self.weak_cpu.clone(),
-            weak_gpu: self.weak_gpu.clone(),
-        }
-    }
-}
-
-impl<T> WeakHybrid<T> {
-    pub fn id(&self) -> Id<T> {
-        self.weak_gpu.id
-    }
-
-    pub fn from_hybrid(h: &Hybrid<T>) -> Self {
-        Self {
-            weak_cpu: Arc::downgrade(&h.cpu_value),
-            weak_gpu: WeakGpu::from_gpu(&h.gpu_value),
-        }
-    }
-
-    pub fn upgrade(&self) -> Option<Hybrid<T>> {
-        Some(Hybrid {
-            cpu_value: self.weak_cpu.upgrade()?,
-            gpu_value: self.weak_gpu.upgrade()?,
-        })
-    }
-
-    pub fn strong_count(&self) -> usize {
-        self.weak_gpu.update.strong_count()
-    }
-
-    pub fn has_external_references(&self) -> bool {
-        self.strong_count() > 0
-    }
-
-    pub fn weak_gpu(&self) -> &WeakGpu<T> {
-        &self.weak_gpu
-    }
-
-    /// A unique identifier.
-    pub fn notifier_index(&self) -> SourceId {
-        self.weak_gpu.notifier_index
-    }
-}
 
 /// RAII structure used to update a `[Hybrid<T>]`.
 ///
@@ -201,41 +59,29 @@ impl<T> WeakHybrid<T> {
 /// assert_eq!(&[50], slab.get_buffer().unwrap().as_vec().as_slice());
 /// ```
 pub struct HybridWriteGuard<'a, T: SlabItem + Clone + Send + Sync + 'static> {
-    lock: RwLockWriteGuard<'a, T>,
     hybrid: &'a Hybrid<T>,
-    pub(crate) mutated: bool,
+    guard: ValueWriteGuard<'a, T>,
 }
 
 impl<T: SlabItem + Clone + Send + Sync + 'static> Deref for HybridWriteGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.lock.deref()
+        self.guard.deref()
     }
 }
 
 impl<T: SlabItem + Clone + Send + Sync + 'static> DerefMut for HybridWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.mutated = true;
-        self.lock.deref_mut()
-    }
-}
-
-impl<T: SlabItem + Clone + Send + Sync + 'static> Drop for HybridWriteGuard<'_, T> {
-    fn drop(&mut self) {
-        if self.mutated {
-            let value: T = self.lock.clone();
-            self.hybrid.gpu_value.set(value);
-        }
+        self.guard.deref_mut()
     }
 }
 
 impl<'a, T: SlabItem + Clone + Send + Sync + 'static> HybridWriteGuard<'a, T> {
     pub fn new(hybrid: &'a Hybrid<T>) -> Self {
         Self {
-            lock: hybrid.cpu_value.write().unwrap(),
             hybrid,
-            mutated: false,
+            guard: hybrid.gpu_value.inner.write_lock(),
         }
     }
 }
@@ -246,9 +92,7 @@ impl<'a, T: SlabItem + Clone + Send + Sync + 'static> HybridWriteGuard<'a, T> {
 /// `SlabAllocator<T>` that created this value.
 ///
 /// Clones of a hybrid all point to the same CPU and GPU data.
-#[derive(IsContainer)]
 pub struct Hybrid<T> {
-    pub(crate) cpu_value: Arc<RwLock<T>>,
     pub(crate) gpu_value: Gpu<T>,
 }
 
@@ -328,7 +172,7 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
 
     /// A unique identifier.
     pub fn notifier_index(&self) -> SourceId {
-        self.gpu_value.notifier_index
+        self.gpu_value.source_id
     }
 
     /// Sets the inner value, but **does not sync to the GPU**.
@@ -346,72 +190,45 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Hybrid<T> {
 ///
 /// Updates are synchronized to the GPU at the behest of the [`SlabAllocator`]
 /// that created this value.
-#[derive(Debug, IsContainer)]
-pub struct Gpu<T> {
-    pub(crate) id: Id<T>,
-    pub(crate) notifier_index: SourceId,
-    pub(crate) notify: async_channel::Sender<SourceId>,
-    pub(crate) update: Arc<Mutex<Vec<SlabUpdate>>>,
+#[repr(transparent)]
+pub struct Gpu<T: SlabItem> {
+    inner: Value<T, OneWayFromCpu>,
+    _phantom: PhantomData<T>,
 }
 
-impl<T> Drop for Gpu<T> {
-    fn drop(&mut self) {
-        let _ = self.notify.try_send(self.notifier_index);
-    }
-}
-
-impl<T> Clone for Gpu<T> {
+impl<T: SlabItem> Clone for Gpu<T> {
     fn clone(&self) -> Self {
         Self {
-            id: self.id,
-            notifier_index: self.notifier_index,
-            notify: self.notify.clone(),
-            update: self.update.clone(),
+            inner: self.inner.clone(),
+            _phantom: PhantomData,
         }
     }
 }
 
 impl<T> Gpu<T> {
     pub fn id(&self) -> Id<T> {
-        self.id
+        let source = self.inner.source_id();
+        Id::new(source.range.first_index)
     }
 }
 
 impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
-    pub fn new(mngr: &SlabAllocator<impl IsRuntime>, value: T) -> Self {
-        let id = mngr.allocate::<T>();
-        let notifier_index = SourceId {
-            range: id.into(),
-            type_is: std::any::type_name::<T>(),
-        };
-        let s = Self {
-            id,
-            notifier_index,
-            notify: mngr.notifier.0.clone(),
-            update: Default::default(),
-        };
-        s.set(value);
-        mngr.insert_update_source(notifier_index, WeakGpuRef::from_gpu(&s));
-        s
+    pub fn new(inner: CpuUpdateSource) -> Self {
+        Self {
+            inner,
+            _phantom: PhantomData,
+        }
     }
 
     pub fn set(&self, value: T) {
-        // UNWRAP: panic on purpose
-        *self.update.lock().unwrap() = vec![SlabUpdate {
-            array: Array::new(Id::new(self.id.inner()), T::SLAB_SIZE as u32),
-            elements: {
-                let mut es = vec![0u32; T::SLAB_SIZE];
-                es.write(Id::new(0), &value);
-                es
-            },
-        }];
-        // UNWRAP: safe because it's unbounded
-        self.notify.try_send(self.notifier_index).unwrap();
+        self.inner.modify(|data| {
+            data.write(Id::ZERO, &value);
+        });
     }
 
     /// A unique identifier.
-    pub fn notifier_index(&self) -> SourceId {
-        self.notifier_index
+    pub fn source_id(&self) -> SourceId {
+        self.inner.source_id()
     }
 }
 
@@ -421,43 +238,33 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> Gpu<T> {
 ///
 /// Updates are syncronized to the GPU at the behest of the
 /// [`SlabAllocator`] that created this array.
-#[derive(Debug, IsContainer)]
-#[array]
 pub struct GpuArray<T> {
-    array: Array<T>,
-    notifier_index: SourceId,
-    notifier: async_channel::Sender<SourceId>,
-    updates: Arc<Mutex<Vec<SlabUpdate>>>,
-}
-
-impl<T> Drop for GpuArray<T> {
-    fn drop(&mut self) {
-        let _ = self.notifier.try_send(self.notifier_index);
-    }
+    inner: CpuUpdateSource,
+    _phantom: PhantomData<T>,
 }
 
 impl<T> Clone for GpuArray<T> {
     fn clone(&self) -> Self {
         GpuArray {
-            notifier: self.notifier.clone(),
-            notifier_index: self.notifier_index,
-            array: self.array,
-            updates: self.updates.clone(),
+            inner: self.inner.clone(),
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<T> GpuArray<T> {
+impl<T: SlabItem> GpuArray<T> {
     pub fn len(&self) -> usize {
-        self.array.len()
+        self.inner.source_id().range.len() as usize / T::SLAB_SIZE
     }
 
     pub fn is_empty(&self) -> bool {
-        self.array.is_empty()
+        self.len() == 0
     }
 
     pub fn array(&self) -> Array<T> {
-        self.array
+        let len = self.len() as u32;
+        let id = Id::new(self.inner.source_id().range.first_index);
+        Array { id, len }
     }
 }
 
@@ -547,8 +354,6 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> GpuArray<T> {
 ///
 /// Updates are syncronized to the GPU at the behest of the
 /// [`SlabAllocator`] that created this array.
-#[derive(IsContainer)]
-#[array]
 pub struct HybridArray<T> {
     cpu_value: Arc<RwLock<Vec<T>>>,
     gpu_value: GpuArray<T>,
@@ -689,52 +494,6 @@ impl<T: SlabItem + Clone + Send + Sync + 'static> HybridArray<T> {
             *here = there.clone();
         }
     }
-}
-
-/// An abstraction over the container type of a hybrid value of `T`.
-///
-/// For example, the container type could be `Hybrid<T>`, `WeakHybrid<T>`,
-/// `Gpu<T>` or `WeakGpu<T>`.
-///
-/// This is a way around Rust not having higher-kinded data types.
-/// It is used to make the container type generic while fixing the element type.
-///
-/// Example usage:
-/// ```rust
-/// use craballoc::prelude::*;
-///
-/// #[derive(Clone, Debug)]
-/// pub enum SomeDetails<Ct: IsContainer = HybridContainer> {
-///     A(Ct::Container<usize>),
-///     B(Ct::Container<u32>),
-/// }
-///
-/// impl<Ct: IsContainer> SomeDetails<Ct> {
-///     pub fn as_a(&self) -> Option<&Ct::Container<usize>> {
-///         if let SomeDetails::A(v) = self {
-///             Some(v)
-///         } else {
-///             None
-///         }
-///     }
-/// }
-/// ```
-pub trait IsContainer {
-    type Container<T>;
-    type Pointer<T>;
-
-    /// Returns a pointer to the data within this container.
-    fn get_pointer<T>(container: &Self::Container<T>) -> Self::Pointer<T>;
-}
-
-/// A type that represents no container, just the value itself.
-pub struct NoContainer;
-
-impl IsContainer for NoContainer {
-    type Container<T> = T;
-    type Pointer<T> = ();
-
-    fn get_pointer<T>(_container: &Self::Container<T>) -> Self::Pointer<T> {}
 }
 
 #[cfg(test)]

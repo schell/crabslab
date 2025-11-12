@@ -33,9 +33,9 @@ pub struct BumpAllocator<R: IsRuntime> {
     buffer_needs_expansion: Arc<AtomicBool>,
     buffer: Arc<RwLock<Option<SlabBuffer<R::Buffer>>>>,
 
-    // The `commit_height` when the last buffer invalidation happened
+    /// The `commit_height` when the last buffer invalidation happened
     buffer_creation_height: Arc<AtomicUsize>,
-    // The next monotonically increasing commit invocation "height"
+    /// The next monotonically increasing commit invocation "height"
     commit_height: Arc<AtomicUsize>,
 }
 
@@ -259,8 +259,8 @@ impl<R: IsRuntime> BumpAllocator<R> {
         buffer
     }
 
-    #[deprecated(since = "0.1.5", note = "please use `commit` instead")]
-    pub fn upkeep(&self) -> SlabBuffer<R::Buffer> {
-        self.commit()
+    /// Returns the current buffer's invalidation height.
+    pub fn buffer_creation_time(&self) -> usize {
+        self.buffer_creation_height.load(ATOMIC_ORDERING)
     }
 }

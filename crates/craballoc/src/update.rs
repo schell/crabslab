@@ -6,8 +6,10 @@
 //! once during a commit phase, guided by update notifications.
 
 use std::{
+    collections::HashSet,
     hash::Hash,
-    sync::{Arc, RwLock, Weak},
+    ops::Deref,
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak},
 };
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -36,17 +38,51 @@ impl core::fmt::Display for SourceId {
 
 #[derive(Default)]
 pub struct SynchronizationData {
-    cpu_updated: bool,
+    /// The ranges of updates in `data`.
+    ///
+    /// These ranges point to `data`, not the slab.
+    cpu_updated: RangeManager<Range>,
     gpu_update_requested: bool,
     data: Vec<u32>,
+}
+
+impl Deref for SynchronizationData {
+    type Target = [u32];
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
 }
 
 impl SynchronizationData {
     pub fn new(len: usize) -> Self {
         Self {
-            cpu_updated: true,
+            cpu_updated: Default::default(),
             gpu_update_requested: false,
             data: vec![0u32; len],
+        }
+    }
+
+    /// Replace the inner data, triggering an update if the data has changed.
+    ///
+    /// ## Panics
+    /// Panics on debug if `data` is a different length than the existing internal
+    /// data.
+    pub fn replace(&mut self, data: Vec<u32>) {
+        debug_assert_eq!(
+            self.data.len(),
+            data.len(),
+            "Existing data length doesn't match replaced data length: {} != {}",
+            self.data.len(),
+            data.len(),
+        );
+
+        if data != self.data {
+            self.data = data;
+            self.cpu_updated.add_range(Range {
+                first_index: 0,
+                last_index: self.data.len() as u32 - 1,
+            });
         }
     }
 }
@@ -76,11 +112,40 @@ pub struct CpuUpdateSource {
     data: Arc<RwLock<SynchronizationData>>,
 }
 
+impl Drop for CpuUpdateSource {
+    fn drop(&mut self) {
+        self.mark_updated();
+    }
+}
+
 impl CpuUpdateSource {
+    fn mark_updated(&self) {
+        // UNWRAP: safe because this channel is unbounded
+        self.sender.try_send(self.source).unwrap();
+    }
+
+    pub(crate) fn ref_count(&self) -> usize {
+        Arc::strong_count(&self.data)
+    }
+
+    pub fn read_lock(&self) -> RwLockReadGuard<'_, SynchronizationData> {
+        // UNWRAP: panic on purpoose
+        self.data.read().unwrap()
+    }
+
+    pub fn write_lock(&self) -> RwLockWriteGuard<'_, SynchronizationData> {
+        // UNWRAP: panic on purpoose
+        self.data.write().unwrap()
+    }
+
     pub fn cpu_data(&self) -> CpuData {
         CpuData {
             synchronization: Arc::downgrade(&self.data),
         }
+    }
+
+    pub fn source_id(&self) -> SourceId {
+        self.source
     }
 
     /// Read the inner data, if any, returning `T`.
@@ -102,15 +167,37 @@ impl CpuUpdateSource {
     pub fn modify<T>(&self, f: impl FnOnce(&mut [u32]) -> T) -> T {
         let mut guard = self.data.write().unwrap();
         let t = f(&mut guard.data);
-        guard.cpu_updated = true;
-        // UNWRAP: safe because this channel is unbounded
-        self.sender.try_send(self.source).unwrap();
+        guard.cpu_updated.add_range(Range {
+            first_index: 0,
+            last_index: self.source.range.len() - 1,
+        });
+        self.mark_updated();
+        t
+    }
+
+    /// Modify the inner data, if any, returning `T`.
+    ///
+    /// In the case this `CpuUpdateSource` represents a [`OneWayFromGpu`](crate::arena::OneWayFromGpu)
+    /// value, the slice provided to the given closure will be empty.
+    ///
+    /// This marks the data as updated, which will cause the data to be sent to the GPU
+    /// on the next commit.
+    pub fn modify_range<T>(&self, range: Range, f: impl FnOnce(&mut [u32]) -> T) -> T {
+        let mut guard = self.data.write().unwrap();
+
+        let t = f(&mut guard.data[range.first_index as usize..=range.last_index as usize]);
+        guard.cpu_updated.add_range(Range {
+            first_index: self.source.range.first_index + range.first_index,
+            last_index: self.source.range.first_index + range.last_index,
+        });
+        self.mark_updated();
         t
     }
 
     /// Request that the next commit synchronize this source with the data from the GPU.
     pub fn request_gpu_sync(&self) {
         self.data.write().unwrap().gpu_update_requested = true;
+        self.mark_updated();
     }
 
     /// A null update source that performs no updates.
@@ -129,9 +216,13 @@ impl CpuUpdateSource {
             data: Default::default(),
         }
     }
+
+    pub fn updated_ranges(&self) -> Vec<Range> {
+        self.data.read().unwrap().cpu_updated.ranges.clone()
+    }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Update {
     pub range: Range,
     pub data: Vec<u32>,
@@ -202,8 +293,22 @@ impl UpdateManager {
         update_source
     }
 
+    /// Returns all the `SourceId`s managed by this `UpdateManager`.
+    pub fn get_managed_source_ids(&self) -> FxHashSet<SourceId> {
+        FxHashSet::from_iter(self.update_sources.read().unwrap().keys().copied())
+    }
+
+    /// Returns whether any update sources have queued updates waiting to be committed.
+    pub fn has_queued_updates(&self) -> bool {
+        !self.notifier_receiver.is_empty() || !self.update_queue.read().unwrap().is_empty()
+    }
+
     /// Return the ids of all sources that require updating.
-    pub fn clear_updated_source_ids(&self) -> FxHashSet<SourceId> {
+    ///
+    /// This clears the update `SourceId`s from their sources and stores
+    /// them for use during the next commit, returning a clone of all updated
+    /// sources since  
+    pub fn get_updated_source_ids(&self) -> FxHashSet<SourceId> {
         // UNWRAP: panic on purpose
         let mut update_set = self.update_queue.write().unwrap();
         while let Ok(source_id) = self.notifier_receiver.try_recv() {
@@ -221,7 +326,7 @@ impl UpdateManager {
         let mut gpu_update_ranges = RangeManager::<Range>::default();
         let mut recycle_ranges = RangeManager::<SourceId>::default();
 
-        let update_source_ids = self.clear_updated_source_ids();
+        let update_source_ids = self.get_updated_source_ids();
         // UNWRAP: panic on purpose
         *self.update_queue.write().unwrap() = Default::default();
         // Prepare all of our GPU buffer writes
@@ -234,14 +339,21 @@ impl UpdateManager {
                     if let Some(sync_data) = cpu_data.synchronization.upgrade() {
                         // Userland still holds a reference to this, schedule the update
                         let mut sync_data_guard = sync_data.write().unwrap();
-                        if sync_data_guard.cpu_updated {
-                            sync_data_guard.cpu_updated = false;
-                            let update_data = Update {
-                                data: sync_data_guard.data.clone(),
-                                range: id.range,
-                            };
-                            log::trace!("updating {id} from CPU");
-                            cpu_update_ranges.add_range(update_data);
+                        let updated_ranges = std::mem::take(&mut sync_data_guard.cpu_updated);
+                        if !updated_ranges.is_empty() {
+                            for range in updated_ranges.ranges.into_iter() {
+                                let local_range = range;
+                                let slab_range = Range {
+                                    first_index: id.range.first_index + range.first_index,
+                                    last_index: id.range.first_index + range.last_index,
+                                };
+                                let update_data = Update {
+                                    data: sync_data_guard.data[local_range].to_vec(),
+                                    range: slab_range,
+                                };
+                                log::trace!("updating {id} from CPU, local range: {local_range:?}, slab range: {slab_range:?}");
+                                cpu_update_ranges.add_range(update_data);
+                            }
                         }
                         if sync_data_guard.gpu_update_requested {
                             sync_data_guard.gpu_update_requested = false;
