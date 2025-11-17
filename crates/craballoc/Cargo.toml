@@ -24,6 +24,8 @@ tracing.workspace = true
 wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
+craballoc-test-wire-types = { path = "../craballoc-test-wire-types" }
 env_logger.workspace = true
 futures-lite.workspace = true
+pretty_assertions.workspace = true
 proptest.workspace = true

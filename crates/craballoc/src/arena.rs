@@ -9,92 +9,80 @@ use std::{
     borrow::Cow,
     marker::PhantomData,
     num::NonZeroU32,
-    ops::{Deref, DerefMut},
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    ops::DerefMut,
+    sync::{Arc, RwLock},
 };
 
 use crabslab::{Array, Id, Slab, SlabItem};
+use snafu::OptionExt;
 
 use crate::{
     buffer::{manager::BumpAllocator, SlabBuffer},
     range::{Range, RangeManager},
     runtime::IsRuntime,
-    update::{
-        CpuUpdateSource, SourceId, SynchronizationData, Update, UpdateManager, UpdateSummary,
-    },
-    Error,
+    update::{CpuUpdateSource, GpuUpdates, SourceId, Update, UpdateManager, UpdateSummary},
+    Error, NoInternalBufferSnafu,
 };
 
 pub trait CanUpdateFromCpu {}
 
-/// Value is synchronized on both CPU and GPU.
-pub struct Bidirectional;
-impl CanUpdateFromCpu for Bidirectional {}
+/// Value is automatically synchronized from CPU to GPU on commit and back on sync.
+pub struct SyncBidirectional;
+impl CanUpdateFromCpu for SyncBidirectional {}
 
-// Value is synchronized from CPU to the GPU, but any changes on the GPU will
-// leave the value out of sync.
-pub struct OneWayFromCpu;
-impl CanUpdateFromCpu for OneWayFromCpu {}
+/// Value is synchronized from CPU to the GPU on commit, but changes on the GPU do
+/// not roundtrip automatically.
+pub struct SyncOneWayFromCpu;
+impl CanUpdateFromCpu for SyncOneWayFromCpu {}
 
-// Value is synchronized from GPU to CPU but cannot be changed from the CPU.
-pub struct OneWayFromGpu;
+/// Value is automatically synchronized from GPU to CPU.
+pub struct SyncOneWayFromGpu;
 
-/// A read lock on a [`Value<T>`].
-///
-/// This is useful for preventing writes to the locked `Value` for the duration
-/// of the scope.
-pub struct ValueReadGuard<'a, T> {
-    guard: RwLockReadGuard<'a, SynchronizationData>,
-    value: T,
-}
+/// Value is not updated.
+pub struct SyncNone;
 
-impl<'a, T> Deref for ValueReadGuard<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-/// A write lock on a [`Value<T>`].
-pub struct ValueWriteGuard<'a, T: SlabItem> {
-    _guard: RwLockWriteGuard<'a, SynchronizationData>,
-    value: T,
-}
-
-impl<'a, T: SlabItem> Deref for ValueWriteGuard<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<'a, T: SlabItem> DerefMut for ValueWriteGuard<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
-    }
-}
-
-impl<'a, T: SlabItem> Drop for ValueWriteGuard<'a, T> {
-    fn drop(&mut self) {
-        self._guard.replace(self.value.slab_data());
-    }
-}
-
-pub struct Value<T: ?Sized, Sync = Bidirectional> {
+pub struct Value<T: ?Sized, Sync = SyncBidirectional> {
     update_source: CpuUpdateSource,
     /// A channell to send updates into.
     _phantom: PhantomData<(Sync, T)>,
 }
 
 impl<T: ?Sized, Sync> Value<T, Sync> {
+    #[cfg(test)]
     pub(crate) fn ref_count(&self) -> usize {
         self.update_source.ref_count()
+    }
+
+    /// Returns the u32 [`Range`] that this value occupies on the slab.
+    pub fn slab_range(&self) -> Range {
+        self.update_source.source_id().range
+    }
+}
+
+impl<T: ?Sized, S> std::fmt::Debug for Value<T, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(&format!(
+            "Value<{}, {}>",
+            std::any::type_name::<T>(),
+            std::any::type_name::<S>()
+        ))
+        .field("slab_range", &self.slab_range())
+        .finish()
     }
 }
 
 impl<T: Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
+    /// Return the [`Id<T>`] that points to this `T` on the slab.
+    pub fn id(&self) -> Id<T> {
+        Id::new(self.update_source.source_id().range.first_index)
+    }
+
+    /// Return the [`Array<T>`] that defines this type's range in the
+    /// slab.
+    pub fn array(&self) -> Array<T> {
+        Array::new(self.id(), 1)
+    }
+
     /// Modify the inner value, queing an update to the GPU.
     pub fn modify<X>(&self, f: impl FnOnce(&mut T) -> X) -> X {
         self.update_source.modify(|data| {
@@ -104,11 +92,20 @@ impl<T: Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
             x
         })
     }
+
+    /// Set the inner value, queing the update to the GPU.
+    pub fn set(&self, t: T) {
+        self.modify(|data| *data = t);
+    }
+
+    /// Get a copy of the value from the local CPU cache.
+    pub fn get(&self) -> T {
+        self.update_source
+            .read(|data| data.read_unchecked(Id::ZERO))
+    }
 }
 
-impl<T: std::fmt::Debug + Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu>
-    Value<[T], Sync>
-{
+impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], Sync> {
     /// The length of the inner array.
     pub fn len(&self) -> usize {
         let u32_size = self.update_source.source_id().range.len() as usize;
@@ -193,7 +190,6 @@ impl<T: std::fmt::Debug + Clone + Default + SlabItem + Sized, Sync: CanUpdateFro
 ///
 /// TODO: write about how values allocated from the arena can conditionally be
 /// synchronized from the CPU to the GPU and back.
-#[derive(Debug)]
 pub struct Arena<R: IsRuntime> {
     /// Manages bump allocation on the slab.
     bump_allocator: BumpAllocator<R>,
@@ -201,6 +197,11 @@ pub struct Arena<R: IsRuntime> {
     update_manager: UpdateManager,
     /// Manages recycled value ranges.
     recycle_ranges: Arc<RwLock<RangeManager<Range>>>,
+    /// Tracks GPU update requests from the CPU, and
+    /// actual update data read from the GPU.
+    ///
+    /// This also _applies_ the updates to the sources it contains.
+    gpu_updates: Arc<RwLock<GpuUpdates>>,
 }
 
 impl<Runtime: IsRuntime> Clone for Arena<Runtime> {
@@ -209,6 +210,7 @@ impl<Runtime: IsRuntime> Clone for Arena<Runtime> {
             bump_allocator: self.bump_allocator.clone(),
             update_manager: self.update_manager.clone(),
             recycle_ranges: self.recycle_ranges.clone(),
+            gpu_updates: self.gpu_updates.clone(),
         }
     }
 }
@@ -224,6 +226,7 @@ impl<R: IsRuntime> Arena<R> {
             bump_allocator: BumpAllocator::new(runtime, label, default_buffer_usages),
             update_manager: UpdateManager::default(),
             recycle_ranges: Default::default(),
+            gpu_updates: Default::default(),
         }
     }
 
@@ -239,7 +242,7 @@ impl<R: IsRuntime> Arena<R> {
 
     #[cfg(test)]
     /// Returns the recycle ranges.
-    pub(crate) fn recycle_ranges(&self) -> impl Deref<Target = RangeManager<Range>> + '_ {
+    pub(crate) fn recycle_ranges(&self) -> impl std::ops::Deref<Target = RangeManager<Range>> + '_ {
         self.recycle_ranges.read().unwrap()
     }
 
@@ -323,7 +326,7 @@ impl<R: IsRuntime> Arena<R> {
     }
 
     #[cfg(test)]
-    pub async fn read_slab<T: SlabItem>(&self, array: Array<T>) -> Result<Vec<T>, Error> {
+    pub async fn read_slab<T: SlabItem>(&self, array: Array<T>) -> Result<Vec<T>, crate::Error> {
         let buffer = self.commit();
         let buffer_len = self.bump_allocator.capacity();
         let u32_array = array.into_u32_array();
@@ -365,9 +368,11 @@ impl<R: IsRuntime> Arena<R> {
         let buffer = self.bump_allocator.commit();
         let UpdateSummary {
             cpu_update_ranges,
-            gpu_update_ranges,
+            gpu_updates,
             recycle_ranges: summary_recycle_ranges,
         } = self.update_manager.clear_updated_sources();
+        log::trace!("  saving gpu requests: {gpu_updates:?}");
+        *self.gpu_updates.write().unwrap() = gpu_updates;
         log::trace!("got summary");
         {
             // Add the dropped sources to the recycle pool
@@ -388,6 +393,46 @@ impl<R: IsRuntime> Arena<R> {
         }
 
         buffer
+    }
+
+    /// Synchronize CPU values with the GPU.
+    ///
+    /// This reads portions of the GPU slab and writes them back to their CPU sources.
+    ///
+    /// ## Errors
+    /// Errs if
+    /// * [`Arena::commit`] has not been called, and there is no internal buffer
+    /// * there is a problem reading data from the GPU
+    pub async fn synchronize(&self) -> Result<(), Error> {
+        log::trace!("synchronizing backend to CPU caches");
+        let buffer = self.get_buffer().context(NoInternalBufferSnafu)?;
+        let buffer_len = self.bump_allocator.capacity() as usize;
+
+        // Read each range from the GPU and collect it.
+        let mut updates = vec![];
+        let ranges = self.gpu_updates.read().unwrap().ranges();
+        log::trace!("  ranges: {ranges:?}");
+        for range in ranges {
+            let runtime = self.bump_allocator.runtime();
+            let data = runtime
+                .buffer_read(&buffer, buffer_len, std::ops::Range::from(range))
+                .await?;
+            let update = Update { range, data };
+            updates.push(update);
+        }
+
+        if updates.is_empty() {
+            log::trace!("  no sources have requested synchronization, skipping");
+        } else {
+            let count = updates.len();
+            let plur = if updates.len() == 1 { "" } else { "s" };
+            log::trace!("  synchronizing {count} update{plur}");
+            // Apply the updates to the CPU sources.
+            let mut gpu_updates = self.gpu_updates.write().unwrap();
+            gpu_updates.apply(updates);
+        }
+
+        Ok(())
     }
 }
 

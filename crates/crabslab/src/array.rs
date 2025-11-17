@@ -1,6 +1,4 @@
 //! A slab-allocated array.
-use core::marker::PhantomData;
-
 use crate::{id::Id, slab::SlabItem};
 
 /// Iterator over [`Id`]s in an [`Array`].

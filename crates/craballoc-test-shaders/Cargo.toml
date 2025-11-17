@@ -1,0 +1,27 @@
+[package]
+name = "craballoc-test-shaders"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata.rust-gpu.install]
+auto-install-rust-toolchain = true
+
+[package.metadata.rust-gpu.build]
+output-dir = "../craballoc/src/test/shaders" 
+multimodule = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+craballoc-test-wire-types = { path = "../craballoc-test-wire-types" }
+crabslab = { path = "../crabslab", default-features = false, features = ["glam"]  }
+spirv-std.workspace = true
+
+# dependencies for CPU code
+[target.'cfg(not(target_arch = "spirv"))'.dependencies]
+glam = { workspace = true, features = ["std"] }
+
+# depedencies for GPU code
+[target.'cfg(target_arch = "spirv")'.dependencies]
+glam = { workspace = true, default-features = false, features = ["libm"] }

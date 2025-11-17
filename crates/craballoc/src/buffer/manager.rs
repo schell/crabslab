@@ -3,7 +3,6 @@
 use std::{
     borrow::Cow,
     num::NonZeroU32,
-    ops::Deref,
     sync::{
         atomic::{AtomicBool, AtomicU32, AtomicUsize},
         Arc, RwLock,
