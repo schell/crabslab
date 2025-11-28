@@ -21,7 +21,9 @@ jobs:
       run: |
           sudo apt-get -y update
           sudo apt-get -y install mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+    - name: Install cargo-nextest
+      run: cargo install --locked cargo-nextest || true
+    - name: Test 
+      run: cargo nextest run -j 1
+      env: 
+        RUST_BACKTRACE: 1
