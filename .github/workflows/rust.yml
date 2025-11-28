@@ -16,6 +16,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+    - name: Install linux deps 
+      if: runner.os == 'Linux'
+      run: |
+          sudo apt-get -y update
+          sudo apt-get -y install mesa-vulkan-drivers libvulkan1 vulkan-tools vulkan-validationlayers
     - name: Build
       run: cargo build --verbose
     - name: Run tests
