@@ -383,7 +383,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
         {
             const SLAB_SIZE: usize = {#slab_size};
 
-            fn read_slab(mut index: usize, slab: &[u32]) -> Self {
+            fn read_slab(mut index: usize, slab: &(impl crabslab::Slab + ?Sized)) -> Self {
                 // Read the hash to tell which variant we're in.
                 let hash =  u32::read_slab(index, slab);
                 index += 1;
@@ -393,7 +393,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
                 }
             }
 
-            fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
+            fn write_slab(&self, index: usize, slab: &mut (impl crabslab::Slab + ?Sized)) -> usize {
                 let slab_size = Self::SLAB_SIZE;
                 let original_index = index;
                 match self {
@@ -527,11 +527,11 @@ fn derive_from_slab_struct(
                 #( <#field_tys as crabslab::SlabItem>::SLAB_SIZE )+*
             };
 
-            fn read_slab(mut index: usize, slab: &[u32]) -> Self {
+            fn read_slab(mut index: usize, slab: &(impl crabslab::Slab + ?Sized)) -> Self {
                 #read_impl
             }
 
-            fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
+            fn write_slab(&self, index: usize, slab: &mut (impl crabslab::Slab + ?Sized)) -> usize {
                 #(#write_index_field_names)*
                 index
             }
@@ -570,12 +570,12 @@ pub fn impl_slabitem_tuples(input: proc_macro::TokenStream) -> proc_macro::Token
             const SLAB_SIZE: usize = {
                 #(#tys::SLAB_SIZE )+*
             };
-            fn read_slab(mut index: usize, slab: &[u32]) -> Self {
+            fn read_slab(mut index: usize, slab: &(impl crabslab::Slab + ?Sized)) -> Self {
                 (
                     #( #reads ,)*
                 )
             }
-            fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
+            fn write_slab(&self, index: usize, slab: &mut (impl crabslab::Slab + ?Sized)) -> usize {
                 #(let index = self.#indices.write_slab(index, slab);)*
                 index
             }

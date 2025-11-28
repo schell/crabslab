@@ -21,7 +21,7 @@ async-channel = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }
 futures-lite = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
-crabslab-derive = { version = "0.4.6", path = "../crabslab-derive" }
+crabslab-derive = { version = "0.4.7", path = "../crabslab-derive" }
 snafu = { workspace = true , optional = true }
 
 [target.'cfg(not(target_arch = "spirv"))'.dependencies]

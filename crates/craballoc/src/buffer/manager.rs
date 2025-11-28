@@ -9,8 +9,6 @@ use std::{
     },
 };
 
-use crabslab::SlabItem;
-
 use crate::{buffer::SlabBuffer, range::Range, runtime::IsRuntime};
 
 const ATOMIC_ORDERING: std::sync::atomic::Ordering = std::sync::atomic::Ordering::Relaxed;
@@ -28,7 +26,7 @@ pub struct BumpAllocator<R: IsRuntime> {
 
     buffer_length: Arc<AtomicU32>,
     buffer_capacity: Arc<RwLock<u32>>,
-    buffer_usages: R::BufferUsages,
+    buffer_usages: Option<R::BufferUsages>,
     buffer_needs_expansion: Arc<AtomicBool>,
     buffer: Arc<RwLock<Option<SlabBuffer<R::Buffer>>>>,
 
@@ -83,13 +81,13 @@ impl<R: IsRuntime> Clone for BumpAllocator<R> {
 
 impl<R: IsRuntime> BumpAllocator<R> {
     pub fn new(
-        runtime: impl AsRef<R>,
+        runtime: &R,
         label: impl Into<Cow<'static, str>>,
-        buffer_usages: R::BufferUsages,
+        buffer_usages: Option<R::BufferUsages>,
     ) -> Self {
         Self {
             label: Arc::new(label.into()),
-            runtime: runtime.as_ref().clone(),
+            runtime: runtime.clone(),
             buffer_length: Arc::new(0.into()),
             // Start with size 1, because some of `wgpu`'s validation depends on it.
             // See <https://github.com/gfx-rs/wgpu/issues/6414> for more info.
@@ -105,20 +103,6 @@ impl<R: IsRuntime> BumpAllocator<R> {
     /// Returns the runtime of the buffer being managed.
     pub fn runtime(&self) -> &R {
         &self.runtime
-    }
-
-    /// Returns the label of the buffer being managed.
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-
-    /// The length of the underlying buffer, in u32 slots.
-    pub fn len(&self) -> u32 {
-        self.buffer_length.load(ATOMIC_ORDERING)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     pub fn capacity(&self) -> u32 {
@@ -139,13 +123,6 @@ impl<R: IsRuntime> BumpAllocator<R> {
             runtime.buffer_create(*capacity as usize, Some(label), self.buffer_usages.clone());
         log::trace!("  ...done!");
         buffer
-    }
-
-    #[deprecated(since = "0.4.0", note = "Use BufferManager::alloc instead")]
-    pub fn maybe_expand_to_fit<T: SlabItem>(&self, len: usize) {
-        if let Some(spaces) = NonZeroU32::new(T::SLAB_SIZE as u32 * len as u32) {
-            let _ = self.alloc(spaces);
-        }
     }
 
     pub fn create_slab_buffer(
@@ -258,6 +235,7 @@ impl<R: IsRuntime> BumpAllocator<R> {
         buffer
     }
 
+    #[cfg(test)]
     /// Returns the current buffer's invalidation height.
     pub fn buffer_creation_time(&self) -> usize {
         self.buffer_creation_height.load(ATOMIC_ORDERING)

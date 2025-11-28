@@ -28,7 +28,7 @@ pub trait IsRuntime: Clone {
         &self,
         capacity: usize,
         label: Option<&str>,
-        usages: Self::BufferUsages,
+        usages: Option<Self::BufferUsages>,
     ) -> Self::Buffer;
 
     /// Copy the contents of one buffer into another at index 0.
@@ -105,11 +105,7 @@ impl IsRuntime for CpuRuntime {
     type Buffer = VecSlab;
     type BufferUsages = ();
 
-    fn buffer_create(&self, capacity: usize, label: Option<&str>, _usages: ()) -> VecSlab {
-        log::trace!(
-            "creating vec buffer '{}' with capacity {capacity}",
-            label.unwrap_or("unknown")
-        );
+    fn buffer_create(&self, capacity: usize, label: Option<&str>, _usages: Option<()>) -> VecSlab {
         VecSlab {
             inner: RwLock::new(vec![0; capacity]),
         }
@@ -121,7 +117,6 @@ impl IsRuntime for CpuRuntime {
         destination_buffer: &VecSlab,
         label: Option<&str>,
     ) {
-        log::trace!("performing copy '{}'", label.unwrap_or("unknown"));
         let this = &destination_buffer;
         let source = source_buffer.inner.read().unwrap();
         let mut destination = this.inner.write().unwrap();
@@ -131,7 +126,6 @@ impl IsRuntime for CpuRuntime {
 
     fn buffer_write(&self, buffer: &Self::Buffer, range: std::ops::Range<usize>, items: &[u32]) {
         let mut guard = buffer.inner.write().unwrap();
-        log::trace!("writing to range {range:?} elements {items:?}");
         let slice = &mut guard[range];
         slice.copy_from_slice(items);
     }
@@ -182,13 +176,13 @@ impl IsRuntime for WgpuRuntime {
         &self,
         capacity: usize,
         label: Option<&str>,
-        usages: wgpu::BufferUsages,
+        usages: Option<wgpu::BufferUsages>,
     ) -> Self::Buffer {
         let size = (capacity * std::mem::size_of::<u32>()) as u64;
         self.device.create_buffer(&wgpu::BufferDescriptor {
             label,
             size,
-            usage: usages
+            usage: usages.unwrap_or_else(wgpu::BufferUsages::empty)
                 | wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC,
@@ -239,10 +233,6 @@ impl IsRuntime for WgpuRuntime {
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-            log::trace!(
-                "copy_buffer_to_buffer byte_offset:{byte_offset}, \
-             output_buffer_size:{output_buffer_size}",
-            );
             encoder.copy_buffer_to_buffer(
                 buffer,
                 byte_offset as u64,

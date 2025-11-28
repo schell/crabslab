@@ -17,15 +17,15 @@ async-channel = "1.8"
 bytemuck = { version = "1.13.0", features = ["derive"] }
 env_logger = "0.11"
 futures-lite = { version = "1.13" }
-glam = { version = "=0.30.4", default-features = false }
+glam = { version = "0.30.8", default-features = false }
 log = "0.4"
 pretty_assertions = "1.4.1"
 proptest = "1.9.0"
 rustc-hash = "1.1"
 snafu = "0.8"
-spirv-std = { git = "https://github.com/rust-gpu/rust-gpu.git", rev = "05b34493ce661dccd6694cf58afc13e3c8f7a7e0" }
+spirv-std = { git = "https://github.com/rust-gpu/rust-gpu.git", rev = "b3eda4df9814b6176d3c0844eb67f70a22ebb378" }
 tracing = "0.1.41"
-wgpu = "26.0.0"
+wgpu = { version = "26.0.0", features = ["spirv"] }
 
 [patch.crates-io]
-spirv-std = { git = "https://github.com/rust-gpu/rust-gpu.git", rev = "05b34493ce661dccd6694cf58afc13e3c8f7a7e0" }
+spirv-std = { git = "https://github.com/rust-gpu/rust-gpu.git", rev = "b3eda4df9814b6176d3c0844eb67f70a22ebb378" }

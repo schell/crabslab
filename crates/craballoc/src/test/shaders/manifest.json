@@ -1,0 +1,7 @@
+[
+  {
+    "source_path": "../craballoc/src/test/shaders/apply_data_changes.spv",
+    "entry_point": "apply_data_changes",
+    "wgsl_entry_point": "apply_data_changes"
+  }
+]

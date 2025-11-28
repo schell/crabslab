@@ -317,13 +317,17 @@ impl<R: IsRange + std::fmt::Debug> RangeAccumulator<R> {
     fn merge_last_gap_if_possible(&mut self) {
         log::trace!("      attempting to merge a gap");
         if let Some(right) = self.visited_ranges.pop() {
-            log::trace!("        right {right:?}");
+            log::trace!("        right {:?}", right.range());
             if let Some(mut left) = self.visited_ranges.pop() {
-                log::trace!("        left {left:?}");
+                log::trace!("        left {:?}", left.range());
                 if left.range().last_index + 1 == right.range().first_index {
-                    log::trace!("      merging contiguous {left:?} {right:?}");
+                    log::trace!(
+                        "      merging contiguous {:?} {:?}",
+                        left.range(),
+                        right.range()
+                    );
                     left.merge_with_right_neighbor(right);
-                    log::trace!("        {left:?}");
+                    log::trace!("        {:?}", left.range());
                     self.visited_ranges.push(left);
                     return;
                 } else {
@@ -455,7 +459,6 @@ impl<R: IsRange + std::fmt::Debug> RangeManager<R> {
     /// that because the ranges are coalesced into disjoint regions. So `n` is proportional to
     /// the sparcity of the input ranges.
     pub fn insert(&mut self, input_range: R) {
-        log::trace!("  inserting range: {input_range:?}");
         let acc = RangeAccumulator {
             visited_ranges: vec![],
             maybe_input_range: Some(input_range),

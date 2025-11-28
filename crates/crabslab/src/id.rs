@@ -1,7 +1,7 @@
 //! Typed identifiers that can also be used as indices.
 use core::marker::PhantomData;
 
-use crate::slab::SlabItem;
+use crate::{slab::SlabItem, Slab};
 
 /// `u32` value of an [`Id`] that does not point to any item.
 pub const ID_NONE: u32 = u32::MAX;
@@ -13,12 +13,13 @@ pub struct Id<T>(pub(crate) u32, PhantomData<T>);
 impl<T: core::any::Any> SlabItem for Id<T> {
     const SLAB_SIZE: usize = { 1 };
 
-    fn read_slab(index: usize, slab: &[u32]) -> Self {
-        Id::new(*crate::slice_index(slab, index))
+    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
+        let inner = slab.read_at(index);
+        Id::new(inner)
     }
 
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
-        *crate::slice_index_mut(slab, index) = self.0;
+    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
+        slab.write_at(index, self.0);
         index + 1
     }
 }

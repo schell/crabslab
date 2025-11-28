@@ -14,14 +14,14 @@ pub trait SlabItem: core::any::Any + Sized {
     const SLAB_SIZE: usize;
 
     /// Read the type out of the slab at `index`.
-    fn read_slab(index: usize, slab: &[u32]) -> Self;
+    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self;
 
     /// Write the type into the slab at starting `index` and return
     /// the new index.
     ///
     /// If the type cannot be written, the returned index will be equal
     /// to `index`.
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize;
+    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize;
 
     #[cfg(not(target_arch = "spirv"))]
     /// Return a vector copy of this value's slab data.
@@ -38,6 +38,12 @@ pub trait SlabItem: core::any::Any + Sized {
 pub trait Slab {
     /// Return the number of u32 elements in the slab.
     fn len(&self) -> usize;
+
+    /// Read the element at the given index, unchecked.
+    fn read_at(&self, index: usize) -> u32;
+
+    /// Write the element at the given index, unchecked.
+    fn write_at(&mut self, index: usize, element: u32);
 
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -115,6 +121,30 @@ impl Slab for [u32] {
         self.len()
     }
 
+    #[inline]
+    fn read_at(&self, index: usize) -> u32 {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index]
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked(self, index) }
+        }
+    }
+
+    #[inline]
+    fn write_at(&mut self, index: usize, element: u32) {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index] = element;
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked_mut(self, index) = element };
+        }
+    }
+
     fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
         T::read_slab(id.0 as usize, self)
     }
@@ -129,6 +159,52 @@ impl Slab for [u32] {
             index = item.write_slab(index, self);
         }
         index
+    }
+}
+
+impl<const N: usize> Slab for [u32; N] {
+    fn len(&self) -> usize {
+        N
+    }
+
+    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
+        T::read_slab(id.0 as usize, self)
+    }
+
+    fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
+        t.write_slab(index, self)
+    }
+
+    fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
+        let mut index = index;
+        for item in t {
+            index = item.write_slab(index, self);
+        }
+        index
+    }
+
+    #[inline]
+    fn read_at(&self, index: usize) -> u32 {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index]
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked(self, index) }
+        }
+    }
+
+    #[inline]
+    fn write_at(&mut self, index: usize, element: u32) {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index] = element;
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked_mut(self, index) = element };
+        }
     }
 }
 
@@ -148,6 +224,30 @@ impl Slab for Vec<u32> {
 
     fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
         self.as_mut_slice().write_indexed_slice(t, index)
+    }
+
+    #[inline]
+    fn read_at(&self, index: usize) -> u32 {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index]
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { spirv_std::arch::IndexUnchecked::index_unchecked(slab, index) }
+        }
+    }
+
+    #[inline]
+    fn write_at(&mut self, index: usize, element: u32) {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index] = element;
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked_mut(slab, index) = element };
+        }
     }
 }
 
@@ -270,6 +370,16 @@ impl<B: Slab> Slab for CpuSlab<B> {
 
     fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
         self.slab.write_indexed_slice(t, index)
+    }
+
+    #[inline]
+    fn read_at(&self, index: usize) -> u32 {
+        self.slab.read_at(index)
+    }
+
+    #[inline]
+    fn write_at(&mut self, index: usize, element: u32) {
+        self.slab.write_at(index, element);
     }
 }
 

@@ -1,15 +1,15 @@
 //! An arena allocator built on a `u32` slab.
 //!
-//! The [`Arena`] type provided by this module is the successor to [`SlabAllocator`].
-//! Much like [`SlabAllocator`], [`Arena`] provides an API to dynamically allocate types that
-//! implement [`SlabItem`] from the CPU, and then synchronize those changes to the GPU.
-//! Unlike [`SlabAllocator`], [`Arena`] also provides synchronization _back_ from the GPU.
-//! Only values that are explicitly set to sync will be synchronized.
+//! [`Arena`] provides an API to dynamically allocate types that
+//! implement [`SlabItem`] from the CPU, and then synchronize those changes to the backend
+//! during [`Arena::commit`].
+//! [`Arena`] also provides synchronization _back_ from the backend using [`Arena::sychronize`].
+//! All values are set to synchronize from the backend by default and must be explicitly set
+//! to opt-out of synchronization with `TODO: add sync opt-out`.
 use std::{
     borrow::Cow,
     marker::PhantomData,
     num::NonZeroU32,
-    ops::DerefMut,
     sync::{Arc, RwLock},
 };
 
@@ -68,6 +68,15 @@ impl<T: ?Sized, S> std::fmt::Debug for Value<T, S> {
         ))
         .field("slab_range", &self.slab_range())
         .finish()
+    }
+}
+
+impl<T: ?Sized, S> Clone for Value<T, S> {
+    fn clone(&self) -> Self {
+        Self {
+            update_source: self.update_source.clone(),
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -218,12 +227,12 @@ impl<Runtime: IsRuntime> Clone for Arena<Runtime> {
 impl<R: IsRuntime> Arena<R> {
     /// Create a new arena.
     pub fn new(
-        runtime: impl AsRef<R>,
+        runtime: &R,
         label: impl Into<Cow<'static, str>>,
-        default_buffer_usages: R::BufferUsages,
+        buffer_usages: Option<R::BufferUsages>,
     ) -> Self {
         Self {
-            bump_allocator: BumpAllocator::new(runtime, label, default_buffer_usages),
+            bump_allocator: BumpAllocator::new(runtime, label, buffer_usages),
             update_manager: UpdateManager::default(),
             recycle_ranges: Default::default(),
             gpu_updates: Default::default(),
@@ -337,7 +346,8 @@ impl<R: IsRuntime> Arena<R> {
             .buffer_read(&buffer, buffer_len as usize, range)
             .await?;
         let mut output = vec![];
-        for id in array.iter() {
+        let output_array = Array::new(Id::<T>::ZERO, array.len);
+        for id in output_array.iter() {
             output.push(data.read_unchecked(id));
         }
         Ok(output)
@@ -384,25 +394,25 @@ impl<R: IsRuntime> Arena<R> {
             log::trace!("done recycling");
         }
 
-        for Update { range, data } in cpu_update_ranges.ranges {
-            log::trace!("writing range {range:?} to buffer");
-            debug_assert_eq!(range.len(), data.len() as u32);
+        for update in cpu_update_ranges.ranges {
+            log::trace!("writing update {update:?} to buffer");
+            debug_assert_eq!(update.range.len(), update.data.len() as u32);
             self.bump_allocator
                 .runtime()
-                .buffer_write(&buffer, range.into(), &data);
+                .buffer_write(&buffer, update.range.into(), &update.data);
         }
 
         buffer
     }
 
-    /// Synchronize CPU values with the GPU.
+    /// Synchronize CPU-cached values with the backend.
     ///
-    /// This reads portions of the GPU slab and writes them back to their CPU sources.
+    /// This reads portions of the backend slab and writes them back to their CPU cache sources.
     ///
     /// ## Errors
     /// Errs if
     /// * [`Arena::commit`] has not been called, and there is no internal buffer
-    /// * there is a problem reading data from the GPU
+    /// * there is a problem reading data from the backend
     pub async fn synchronize(&self) -> Result<(), Error> {
         log::trace!("synchronizing backend to CPU caches");
         let buffer = self.get_buffer().context(NoInternalBufferSnafu)?;
@@ -434,6 +444,11 @@ impl<R: IsRuntime> Arena<R> {
 
         Ok(())
     }
+
+    /// Return the runtime used by this `Arena`.
+    pub fn runtime(&self) -> &R {
+        self.bump_allocator.runtime()
+    }
 }
 
 #[cfg(test)]
@@ -442,7 +457,7 @@ mod test {
 
     #[test]
     fn range_full() {
-        let arena = Arena::new(crate::wgpu_runtime(), "tests", wgpu::BufferUsages::empty());
+        let arena = Arena::new(&crate::wgpu_runtime(), "tests", None);
         let values = arena.new_array(0u32..10);
         assert_eq!(10, values.len());
     }

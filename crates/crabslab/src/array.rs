@@ -1,5 +1,5 @@
 //! A slab-allocated array.
-use crate::{id::Id, slab::SlabItem};
+use crate::{id::Id, slab::SlabItem, Slab};
 
 /// Iterator over [`Id`]s in an [`Array`].
 #[derive(Clone, Copy)]
@@ -87,12 +87,12 @@ impl<T> PartialEq for Array<T> {
 impl<T: SlabItem> SlabItem for Array<T> {
     const SLAB_SIZE: usize = 2;
 
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize {
+    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
         let index = self.id.write_slab(index, slab);
         self.len.write_slab(index, slab)
     }
 
-    fn read_slab(index: usize, slab: &[u32]) -> Self {
+    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
         let start = u32::read_slab(index, slab);
         let len = u32::read_slab(index + 1, slab);
         Array::new(Id::new(start), len)

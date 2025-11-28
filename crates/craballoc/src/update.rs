@@ -9,7 +9,7 @@ use std::{
     collections::BTreeMap,
     hash::Hash,
     ops::{Deref, DerefMut},
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak},
+    sync::{Arc, RwLock, Weak},
 };
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -106,18 +106,9 @@ impl CpuUpdateSource {
         });
     }
 
-    pub(crate) fn ref_count(&self) -> usize {
+    #[cfg(test)]
+    pub fn ref_count(&self) -> usize {
         Arc::strong_count(&self.data)
-    }
-
-    pub fn read_lock(&self) -> RwLockReadGuard<'_, SynchronizationData> {
-        // UNWRAP: panic on purpoose
-        self.data.read().unwrap()
-    }
-
-    pub fn write_lock(&self) -> RwLockWriteGuard<'_, SynchronizationData> {
-        // UNWRAP: panic on purpoose
-        self.data.write().unwrap()
     }
 
     pub fn cpu_data(&self) -> CpuData {
@@ -207,10 +198,26 @@ impl CpuUpdateSource {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Update {
     pub range: Range,
     pub data: Vec<u32>,
+}
+
+impl std::fmt::Debug for Update {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Update")
+            .field("range", &self.range)
+            .field(
+                "data",
+                &if self.data.len() <= 6 {
+                    format!("{:?}", self.data)
+                } else {
+                    "[...]".to_string()
+                },
+            )
+            .finish()
+    }
 }
 
 #[derive(Default)]
@@ -219,7 +226,7 @@ pub struct GpuUpdates {
     ///
     /// Source ranges may be contiguous with each other, but must _not_ (and _will not_)
     /// be overlapping.
-    sources: BTreeMap<Range, Arc<RwLock<SynchronizationData>>>,
+    sources: BTreeMap<Range, Weak<RwLock<SynchronizationData>>>,
 }
 
 impl std::fmt::Debug for GpuUpdates {
@@ -232,8 +239,8 @@ impl std::fmt::Debug for GpuUpdates {
 
 impl GpuUpdates {
     /// Insert a source.
-    pub fn insert(&mut self, source: SourceId, data: Arc<RwLock<SynchronizationData>>) {
-        self.sources.insert(source.range, data);
+    pub fn insert(&mut self, source_range: Range, data: &Arc<RwLock<SynchronizationData>>) {
+        self.sources.insert(source_range, Arc::downgrade(data));
     }
 
     /// Return an iterator over the ranges to be updated.
@@ -243,16 +250,19 @@ impl GpuUpdates {
 
     /// Apply updates received from the GPU to their request sources.
     pub fn apply(&mut self, updates: Vec<Update>) {
-        let Self { sources } = self;
         let mut updates = updates.into_iter();
-        let mut sources = sources.into_iter();
+        let mut sources = std::mem::take(&mut self.sources).into_iter();
         // One update may apply to more than one source, as the requests have been coalesced
         // into disjoint ranges.
         //
         // Both updates and sources are ordered.
         let mut next_update = updates.next();
         let mut next_source = sources.next();
+        let mut step = 0;
         loop {
+            log::trace!("update {step}");
+            log::trace!("  next_update: {next_update:?}");
+            log::trace!("  next_source: {next_source:?}");
             match (next_update.take(), next_source.take()) {
                 (None, None) => {
                     log::trace!("  updates are done!");
@@ -260,36 +270,50 @@ impl GpuUpdates {
                 }
                 (None, Some(_)) => unreachable!("  ran out of sources"),
                 (Some(_), None) => unreachable!("  ran out of updates"),
-                (Some(mut update), Some((source_range, source_data))) => {
+                (Some(mut update), Some((source_range, weak_source_data))) => {
+                    log::trace!("  applying an update as both are 'Some'");
                     // Updates and sources should move in lockstep.
                     debug_assert_eq!(
                         update.range.first_index, source_range.first_index,
                         "mismatched first index"
                     );
+                    // Get the chunk of data that corresponds to this source and updated it
+                    let update_chunk = update.take(source_range.len());
+                    debug_assert_eq!(
+                        source_range.len(),
+                        update_chunk.data.len() as u32,
+                        "chunk len {} != source range len {}",
+                        update_chunk.data.len(),
+                        source_range.len()
+                    );
+                    log::trace!("    took chunk {update_chunk:?}");
+                    log::trace!("    remaining update is now: {update:?}");
 
-                    log::trace!("  update: {update:?} source_range: {source_range:?}");
-
-                    {
-                        // Get the chunk of data that corresponds to this source and updated it
-                        let update_chunk = update.take(source_range.len());
-                        debug_assert_eq!(
-                            source_range.len(),
-                            update_chunk.data.len() as u32,
-                            "chunk len {} != source range len {}",
-                            update_chunk.data.len(),
-                            source_range.len()
-                        );
-                        log::trace!("    took chunk {update_chunk:?}");
+                    // If we can upgrade the source (ie it hasn't been dropped) then write the updated
+                    // data to the source.
+                    if let Some(source_data) = weak_source_data.upgrade() {
                         let mut guard = source_data.write().unwrap();
                         guard.data.copy_from_slice(&update_chunk.data);
+                        // Save this source for the next commit+synchronize invocation
+                        self.insert(source_range, &source_data);
+                    } else {
+                        log::trace!("    slab range {source_range:?} was dropped between calls to commit and synchronize");
                     }
 
                     // Put the remainder of the update, if any
                     if !update.range.is_empty() {
+                        log::trace!(
+                            "    update range is not empty, continuing with the same update"
+                        );
                         next_update = Some(update);
+                    } else {
+                        log::trace!("    update range is empty, taking the next update");
+                        next_update = updates.next();
                     }
+                    next_source = sources.next();
                 }
             }
+            step += 1;
         }
     }
 }
@@ -465,7 +489,7 @@ impl UpdateManager {
             backend_sync_source_ids.retain(|id| {
                 if let Some(cpu_data) = cpu_cache_guard.get_mut(id) {
                     if let Some(sync_data) = cpu_data.synchronization.upgrade() {
-                        gpu_updates.insert(*id, sync_data.clone());
+                        gpu_updates.insert(id.range, &sync_data);
                         true
                     } else {
                         // This source has been dropped and will be recycled
