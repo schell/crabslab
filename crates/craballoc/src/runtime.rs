@@ -105,7 +105,7 @@ impl IsRuntime for CpuRuntime {
     type Buffer = VecSlab;
     type BufferUsages = ();
 
-    fn buffer_create(&self, capacity: usize, label: Option<&str>, _usages: Option<()>) -> VecSlab {
+    fn buffer_create(&self, capacity: usize, _label: Option<&str>, _usages: Option<()>) -> VecSlab {
         VecSlab {
             inner: RwLock::new(vec![0; capacity]),
         }
@@ -115,7 +115,7 @@ impl IsRuntime for CpuRuntime {
         &self,
         source_buffer: &VecSlab,
         destination_buffer: &VecSlab,
-        label: Option<&str>,
+        _label: Option<&str>,
     ) {
         let this = &destination_buffer;
         let source = source_buffer.inner.read().unwrap();
