@@ -1,17 +1,26 @@
 //! Crafting a tasty slab.
+//!
+//! This crate provides [`Arena`] allocation backed by a `u32` slab.
 #![doc = include_str!("../README.md")]
 
+use snafu::prelude::*;
+
+pub mod arena;
+mod buffer;
 pub mod range;
 pub mod runtime;
-pub mod slab;
-pub mod value;
+// pub mod slab;
+mod update;
+// pub mod value;
 
 pub mod prelude {
     //! Easy-include prelude module.
     pub extern crate crabslab;
-    pub use super::runtime::*;
-    pub use super::slab::*;
-    pub use super::value::*;
+    pub use super::arena::{Arena, Value};
+    pub use super::runtime::CpuRuntime;
+    #[cfg(feature = "wgpu")]
+    pub use super::runtime::WgpuRuntime;
+    pub use crabslab::{Array, Id};
 }
 
 #[cfg(doc)]
@@ -19,197 +28,49 @@ use prelude::crabslab::SlabItem;
 #[cfg(doc)]
 use prelude::*;
 
-#[cfg(test)]
-mod test {
-    use std::sync::atomic::Ordering;
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
+pub enum Error {
+    #[snafu(display("Slab has no internal buffer. Please call Arena::commit first"))]
+    NoInternalBuffer,
 
-    pub use crabslab::Slab;
+    #[snafu(display("Async recv error: {source}"))]
+    AsyncRecv { source: async_channel::RecvError },
 
-    use crate::{range::Range, runtime::CpuRuntime, slab::SlabAllocator};
+    #[cfg(feature = "wgpu")]
+    #[snafu(display("Async error: {source}"))]
+    Async { source: wgpu::BufferAsyncError },
 
-    #[test]
-    fn mngr_updates_count_sanity() {
-        let slab = SlabAllocator::new(CpuRuntime, "sanity", ());
-        assert!(
-            slab.get_buffer().is_none(),
-            "should not have a buffer until after 'commit'"
-        );
-        assert!(
-            !slab.has_queued_updates(),
-            "should not have any queued updates"
-        );
-        {
-            let value = slab.new_value(666u32);
-            assert_eq!(
-                1,
-                value.ref_count(),
-                "slab should not retain a count on value"
-            );
-            assert!(
-                slab.has_queued_updates(),
-                "should have queued updates after new value"
-            );
-        }
-        let buffer = slab.commit();
-        assert_eq!(
-            0,
-            slab.update_sources.read().unwrap().len(),
-            "value should have dropped with no refs"
-        );
-        {
-            let values = slab.new_array([666u32, 420u32]);
-            assert_eq!(
-                1,
-                values.ref_count(),
-                "slab should not retain a count on array"
-            );
-        }
-        let new_buffer = slab.commit();
-        assert!(
-            buffer.is_invalid(),
-            "buffer capacity change should have invalidated the old buffer"
-        );
-        assert!(new_buffer.is_valid());
-        assert_eq!(
-            0,
-            slab.update_sources.read().unwrap().len(),
-            "array should have dropped with no refs"
-        );
-    }
+    #[cfg(feature = "wgpu")]
+    #[snafu(display("Poll error: {source}"))]
+    Poll { source: wgpu::PollError },
 
-    #[test]
-    fn range_sanity() {
-        let a = Range {
-            first_index: 1,
-            last_index: 2,
-        };
-        let b = Range {
-            first_index: 0,
-            last_index: 0,
-        };
-        assert!(!a.intersects(&b));
-        assert!(!b.intersects(&a));
-    }
+    #[snafu(display("{source}"))]
+    Other { source: Box<dyn std::error::Error> },
+}
 
-    #[test]
-    fn slab_manager_sanity() {
-        let m = SlabAllocator::new(CpuRuntime, "sanity", ());
-        log::info!("allocating 4 unused u32 slots");
-        let _ = m.allocate::<u32>();
-        let _ = m.allocate::<u32>();
-        let _ = m.allocate::<u32>();
-        let _ = m.allocate::<u32>();
-
-        log::info!("creating 4 update sources");
-        let h4 = m.new_value(0u32);
-        let h5 = m.new_value(0u32);
-        let h6 = m.new_value(0u32);
-        let h7 = m.new_value(0u32);
-        log::info!("running commit");
-        let buffer = m.commit();
-        assert!(
-            buffer.is_new_this_commit(),
-            "invocation {} != invalidation {} != creation {}",
-            buffer.invocation_k(),
-            buffer.invalidation_k(),
-            buffer.creation_time()
-        );
-        assert!(m.recycles.read().unwrap().ranges.is_empty());
-        assert_eq!(4, m.update_sources.read().unwrap().len());
-        let k = m.update_k.load(Ordering::Relaxed);
-        assert_eq!(4, k);
-
-        log::info!("dropping 4 update sources");
-        drop(h4);
-        drop(h5);
-        drop(h6);
-        drop(h7);
-        let _ = m.commit();
-        assert!(
-            !buffer.is_new_this_commit(),
-            "buffer was created last commit"
-        );
-        assert!(buffer.is_valid(), "decreasing capacity never happens");
-        assert_eq!(1, m.recycles.read().unwrap().ranges.len());
-        assert!(m.update_sources.read().unwrap().is_empty());
-
-        log::info!("creating 4 update sources, round two");
-        let h4 = m.new_value(0u32);
-        let h5 = m.new_value(0u32);
-        let h6 = m.new_value(0u32);
-        let h7 = m.new_value(0u32);
-        assert!(m.recycles.read().unwrap().ranges.is_empty());
-        assert_eq!(4, m.update_sources.read().unwrap().len());
-        let k = m.update_k.load(Ordering::Relaxed);
-        // MAYBE_TODO: recycle "update_k"s instead of incrementing for each new source
-        assert_eq!(8, k);
-
-        log::info!("creating one more update source, immediately dropping it and two others");
-        let h8 = m.new_value(0u32);
-        drop(h8);
-        drop(h4);
-        drop(h6);
-        let _ = m.commit();
-        assert_eq!(3, m.recycles.read().unwrap().ranges.len());
-        assert_eq!(2, m.update_sources.read().unwrap().len());
-        assert_eq!(9, m.update_k.load(Ordering::Relaxed));
-
-        drop(h7);
-        drop(h5);
-        let _ = m.commit();
-        m.defrag();
-        assert_eq!(
-            1,
-            m.recycles.read().unwrap().ranges.len(),
-            "ranges: {:#?}",
-            m.recycles.read().unwrap().ranges
-        );
-    }
-
-    #[test]
-    fn hybrid_write_guard() {
-        let m = SlabAllocator::new(CpuRuntime, "sanity", ());
-        let h4 = m.new_value(0u32);
-        assert!(
-            m.get_buffer().is_none(),
-            "buffer should not be created until after first `commit`"
-        );
-        m.commit();
-
-        {
-            let mut guard = h4.lock();
-            assert_eq!(0, *guard);
-            assert!(!guard.mutated, "guard should not mutate with deref");
-
-            *guard += 10;
-            assert_eq!(10, *guard);
-            assert!(guard.mutated, "guard should mutate with deref mut");
-            let buffer = m.get_buffer().unwrap();
-            let v = buffer.as_vec();
-            assert_eq!(
-                &[0],
-                v.as_slice(),
-                "underlying buffer should not be written until after `commit`",
-            );
-        }
-        m.commit();
-
-        let buffer = m.get_buffer().unwrap();
-        assert_eq!(&[10], buffer.as_vec().as_slice());
-    }
-
-    #[test]
-    fn overwrite_sanity() {
-        let m = SlabAllocator::new(CpuRuntime, "sanity", ());
-        let a = m.new_value(0u32);
-        m.commit();
-        a.modify(|u| *u = 1);
-        a.modify(|u| *u = 2);
-        let vs = m.get_buffer().unwrap().as_vec().clone();
-        assert_eq!(0, vs[0]);
-
-        m.commit();
-        let vs = m.get_buffer().unwrap().as_vec().clone();
-        assert_eq!(2, vs[0]);
+#[cfg(all(test, feature = "wgpu"))]
+fn wgpu_runtime() -> crate::runtime::WgpuRuntime {
+    let backends = wgpu::Backends::PRIMARY;
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends,
+        ..Default::default()
+    });
+    let adapter =
+        futures_lite::future::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .unwrap();
+    let (device, queue) =
+        futures_lite::future::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .unwrap();
+    crate::runtime::WgpuRuntime {
+        device: device.into(),
+        queue: queue.into(),
     }
 }
+
+#[cfg(test)]
+mod test;

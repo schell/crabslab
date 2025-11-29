@@ -17,7 +17,7 @@ pub use array::*;
 pub use id::*;
 pub use slab::*;
 
-pub use crabslab_derive::{IsContainer, SlabItem};
+pub use crabslab_derive::SlabItem;
 
 #[cfg(not(target_arch = "spirv"))]
 /// Proxy for `u32::saturating_sub`.
@@ -42,22 +42,10 @@ pub fn slice_index<T>(slab: &[T], index: usize) -> &T {
     &slab[index]
 }
 
-#[cfg(not(target_arch = "spirv"))]
-#[inline]
-pub fn slice_index_mut<T>(slab: &mut [T], index: usize) -> &mut T {
-    &mut slab[index]
-}
-
 #[cfg(target_arch = "spirv")]
 #[inline]
 pub fn slice_index<T>(slab: &[T], index: usize) -> &T {
     unsafe { spirv_std::arch::IndexUnchecked::index_unchecked(slab, index) }
-}
-
-#[cfg(target_arch = "spirv")]
-#[inline]
-pub fn slice_index_mut<T>(slab: &mut [T], index: usize) -> &mut T {
-    unsafe { spirv_std::arch::IndexUnchecked::index_unchecked_mut(slab, index) }
 }
 
 #[cfg(not(target_arch = "spirv"))]

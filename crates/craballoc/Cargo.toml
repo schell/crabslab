@@ -1,6 +1,6 @@
 [package]
 name = "craballoc"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 description = "Slab allocator with RAII"
 repository = "https://github.com/schell/crabslab"
@@ -16,7 +16,7 @@ wgpu = ["dep:wgpu"]
 [dependencies]
 async-channel.workspace = true
 bytemuck.workspace = true
-crabslab = { path = "../crabslab", version = "0.6.6" }
+crabslab = { path = "../crabslab", version = "0.7.0" }
 log.workspace = true
 rustc-hash.workspace = true
 snafu.workspace = true
@@ -24,5 +24,9 @@ tracing.workspace = true
 wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
+craballoc-test-wire-types = { path = "../craballoc-test-wire-types" }
 env_logger.workspace = true
 futures-lite.workspace = true
+glam.workspace = true
+pretty_assertions.workspace = true
+proptest.workspace = true

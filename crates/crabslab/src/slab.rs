@@ -14,20 +14,36 @@ pub trait SlabItem: core::any::Any + Sized {
     const SLAB_SIZE: usize;
 
     /// Read the type out of the slab at `index`.
-    fn read_slab(index: usize, slab: &[u32]) -> Self;
+    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self;
 
     /// Write the type into the slab at starting `index` and return
     /// the new index.
     ///
     /// If the type cannot be written, the returned index will be equal
     /// to `index`.
-    fn write_slab(&self, index: usize, slab: &mut [u32]) -> usize;
+    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize;
+
+    #[cfg(not(target_arch = "spirv"))]
+    /// Return a vector copy of this value's slab data.
+    ///
+    /// Only available on CPU.
+    fn slab_data(&self) -> Vec<u32> {
+        let mut data = vec![0u32; Self::SLAB_SIZE];
+        self.write_slab(0, &mut data);
+        data
+    }
 }
 
 /// Trait for slabs of `u32`s that can store many types.
 pub trait Slab {
     /// Return the number of u32 elements in the slab.
     fn len(&self) -> usize;
+
+    /// Read the element at the given index, unchecked.
+    fn read_at(&self, index: usize) -> u32;
+
+    /// Write the element at the given index, unchecked.
+    fn write_at(&mut self, index: usize, element: u32);
 
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -105,6 +121,30 @@ impl Slab for [u32] {
         self.len()
     }
 
+    #[inline]
+    fn read_at(&self, index: usize) -> u32 {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index]
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked(self, index) }
+        }
+    }
+
+    #[inline]
+    fn write_at(&mut self, index: usize, element: u32) {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index] = element;
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked_mut(self, index) = element };
+        }
+    }
+
     fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
         T::read_slab(id.0 as usize, self)
     }
@@ -119,6 +159,52 @@ impl Slab for [u32] {
             index = item.write_slab(index, self);
         }
         index
+    }
+}
+
+impl<const N: usize> Slab for [u32; N] {
+    fn len(&self) -> usize {
+        N
+    }
+
+    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
+        T::read_slab(id.0 as usize, self)
+    }
+
+    fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
+        t.write_slab(index, self)
+    }
+
+    fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
+        let mut index = index;
+        for item in t {
+            index = item.write_slab(index, self);
+        }
+        index
+    }
+
+    #[inline]
+    fn read_at(&self, index: usize) -> u32 {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index]
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked(self, index) }
+        }
+    }
+
+    #[inline]
+    fn write_at(&mut self, index: usize, element: u32) {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index] = element;
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked_mut(self, index) = element };
+        }
     }
 }
 
@@ -138,6 +224,30 @@ impl Slab for Vec<u32> {
 
     fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
         self.as_mut_slice().write_indexed_slice(t, index)
+    }
+
+    #[inline]
+    fn read_at(&self, index: usize) -> u32 {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index]
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { spirv_std::arch::IndexUnchecked::index_unchecked(slab, index) }
+        }
+    }
+
+    #[inline]
+    fn write_at(&mut self, index: usize, element: u32) {
+        #[cfg(not(target_arch = "spirv"))]
+        {
+            self[index] = element;
+        }
+        #[cfg(target_arch = "spirv")]
+        {
+            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked_mut(slab, index) = element };
+        }
     }
 }
 
@@ -197,7 +307,7 @@ pub trait GrowableSlab: Slab {
         }
         self.maybe_expand_to_fit::<T>(len);
         let index = self.increment_len(T::SLAB_SIZE * len);
-        Array::new(index as u32, len as u32)
+        Array::new(Id::new(index as u32), len as u32)
     }
 
     /// Append to the end of the buffer.
@@ -260,6 +370,16 @@ impl<B: Slab> Slab for CpuSlab<B> {
 
     fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
         self.slab.write_indexed_slice(t, index)
+    }
+
+    #[inline]
+    fn read_at(&self, index: usize) -> u32 {
+        self.slab.read_at(index)
+    }
+
+    #[inline]
+    fn write_at(&mut self, index: usize, element: u32) {
+        self.slab.write_at(index, element);
     }
 }
 
@@ -328,16 +448,16 @@ mod test {
         slab.write_indexed(&666, 1);
         let t = slab.read(Id::<[u32; 2]>::new(0));
         assert_eq!([42, 666], t);
-        let t: Vec<u32> = slab.read_vec(Array::new(0, 2));
+        let t: Vec<u32> = slab.read_vec(Array::new(Id::ZERO, 2));
         assert_eq!([42, 666], t[..]);
         slab.write_indexed_slice(&[1, 2, 3, 4], 2);
-        let t: Vec<u32> = slab.read_vec(Array::new(2, 4));
+        let t: Vec<u32> = slab.read_vec(Array::new(Id::new(2), 4));
         assert_eq!([1, 2, 3, 4], t[..]);
 
         // use _f32 explicit, otherwise it fails
         slab.write_indexed_slice(&[[1.0_f32, 2.0, 3.0, 4.0], [5.5, 6.5, 7.5, 8.5]], 0);
 
-        let arr = Array::<[f32; 4]>::new(0, 2);
+        let arr = Array::<[f32; 4]>::new(Id::ZERO, 2);
         assert_eq!(Id::new(0), arr.at(0));
         assert_eq!(Id::new(4), arr.at(1));
         assert_eq!([1.0, 2.0, 3.0, 4.0], slab.read(arr.at(0)));
@@ -378,7 +498,7 @@ mod test {
         let geometry_slab_size = Vertex::SLAB_SIZE * geometry.len();
         let mut slab = vec![0u32; geometry_slab_size + Array::<Vertex>::SLAB_SIZE];
         let index = 0usize;
-        let vertices = Array::<Vertex>::new(index as u32, geometry.len() as u32);
+        let vertices = Array::<Vertex>::new(Id::new(index as u32), geometry.len() as u32);
         let index = slab.write_indexed_slice(&geometry, index);
         assert_eq!(geometry_slab_size, index);
         let vertices_id = Id::<Array<Vertex>>::from(index);
