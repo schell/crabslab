@@ -165,13 +165,13 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
         })
     }
 
-    pub fn modify_item<X>(&self, index: u32, f: impl FnOnce(&mut T) -> X) -> Option<X> {
-        (index < self.len() as u32).then_some(())?;
+    pub fn modify_item<X>(&self, index: usize, f: impl FnOnce(&mut T) -> X) -> Option<X> {
+        (index < self.len()).then_some(())?;
         Some(self.modify_range(index..=index, |ts| f(&mut ts[0])))
     }
 
-    pub fn read_item<X>(&self, index: u32, f: impl FnOnce(&T) -> X) -> Option<X> {
-        (index < self.len() as u32).then_some(())?;
+    pub fn read_item<X>(&self, index: usize, f: impl FnOnce(&T) -> X) -> Option<X> {
+        (index < self.len()).then_some(())?;
         Some(self.read_range(index..=index, |ts| f(&ts[0])))
     }
 
