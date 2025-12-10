@@ -6,12 +6,10 @@
 use snafu::prelude::*;
 
 pub mod arena;
-mod buffer;
+pub mod buffer;
 pub mod range;
 pub mod runtime;
-// pub mod slab;
 mod update;
-// pub mod value;
 
 pub mod prelude {
     //! Easy-include prelude module.
