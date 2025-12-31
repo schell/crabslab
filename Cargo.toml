@@ -26,6 +26,7 @@ snafu = "0.8"
 spirv-std = { git = "https://github.com/rust-gpu/rust-gpu.git", rev = "b3eda4df9814b6176d3c0844eb67f70a22ebb378" }
 tracing = "0.1.41"
 wgpu = { version = "26.0.0", features = ["spirv"] }
+wgsl-rs = { path = "../wgsl-rs/crates/wgsl-rs" }
 
 [patch.crates-io]
 spirv-std = { git = "https://github.com/rust-gpu/rust-gpu.git", rev = "b3eda4df9814b6176d3c0844eb67f70a22ebb378" }
