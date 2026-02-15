@@ -8,6 +8,14 @@
 
 [See the example below](#example).
 
+This project is funded through [NGI Zero Commons](https://nlnet.nl/commonsfund/), a fund established by [NLnet](https://nlnet.nl) 
+with financial support from the European Commission's [Next Generation Internet](https://ngi.eu) program. 
+Learn more at the [2025 NLnet project page](https://nlnet.nl/project/Renderling-Ecosystem/).
+
+[<img src="https://nlnet.nl/logo/banner.png" alt="NLnet foundation logo" width="20%" />](https://nlnet.nl)
+
+[<img src="https://nlnet.nl/image/logos/NGI0_tag.svg" alt="NGI Zero Logo" width="20%" />](https://nlnet.nl/core)
+
 ## But Why?
 It's hard to get data onto GPUs in the form you expect.
 
@@ -93,3 +101,10 @@ let (light_id, slab) = cpu_code();
 // marshalling your data depends on which GPU library you are using...
 shader_code(light_id, &slab);
 ```
+
+## 🫶 Sponsor this!
+
+This work will always be free and open source. 
+If you use it (outright or for inspiration), please consider donating.
+
+[💰 Sponsor 💝](https://github.com/sponsors/schell)
