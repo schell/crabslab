@@ -785,3 +785,17 @@ demonstrates this -- each match arm constructs a full `Data` with all fields.
 5. Human-readable WGSL output for debugging
 6. The `#[slab_item]` annotation generates correct ID types, array types, and
    read/write macros for structs, tuple structs, and `#[repr(u32)]` enums
+
+## Status
+
+These are the tasks left "todo" in this plan:
+
+
+* [x] Phase 0: wgsl-rs prerequisites 
+* [ ] Phase 1: `#[slab_module]` macro 
+* [ ] Phase 2: New `SlabItem` trait 
+* [ ] Phase 3: Update `craballoc` 
+* [ ] Phase 4: Wire types migration 
+* [ ] Phase 5: Compute shader migration 
+* [ ] Phase 6: Cleanup 
+* [ ] Phase 7: Testing 
