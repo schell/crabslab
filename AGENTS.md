@@ -4,8 +4,11 @@ Guidelines for AI agents working in the crabslab repository.
 
 ## Project Overview
 
-`crabslab` is a slab allocator focused on marshalling data between CPUs and GPUs,
-designed to work with `rust-gpu` for writing shaders in Rust.
+`crabslab` is a slab allocator focused on marshalling data between CPUs and GPUs.
+The project is migrating from `rust-gpu`/SPIR-V to `wgsl-rs` (Rust-to-WGSL
+transpilation). The migration plan lives in `plans/` -- see
+`plans/2026-02-14-wgsl-rs-buildout.md` for the current buildout plan and source
+of truth for all migration decisions.
 
 ### Workspace Structure
 

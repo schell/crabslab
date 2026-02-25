@@ -1,7 +1,7 @@
 # Transition `crabslab` from Rust-GPU/SPIR-V to `wgsl-rs`
 
 **Date:** 2026-02-14
-**Revised:** 2026-02-20
+**Revised:** 2026-02-25
 
 ## Overview
 
@@ -10,7 +10,8 @@ compilation, `cargo-gpu`) to `wgsl-rs` (proc-macro-based Rust-to-WGSL
 transpilation). The core abstraction changes from trait-based generics
 (`SlabItem`, `Slab`) to function-based serialization (`#[slab_module]`,
 `#[slab_item]`, per-type `*_from_array`/`*_to_array` functions) with wgsl-rs
-built-in `slab_read!`/`slab_write!` macros for storage buffer access.
+built-in `slab_read_array!`/`slab_write_array!` macros for storage buffer
+access.
 
 ## Key Architectural Decisions
 
@@ -20,7 +21,7 @@ built-in `slab_read!`/`slab_write!` macros for storage buffer access.
    an associated `Id` type, auto-implemented by `#[slab_module]`.
 3. **Old `Slab` and `GrowableSlab` traits are removed.**
 4. **Slab read/write is separated into two layers:**
-   - **Storage buffer access:** wgsl-rs built-in `slab_read!`/`slab_write!`
+   - **Storage buffer access:** wgsl-rs built-in `slab_read_array!`/`slab_write_array!`
      statement macros copy `[u32; N]` arrays between storage buffers and local
      variables. These are generic (not per-type) and emit WGSL `for` loops.
    - **Struct (de)serialization:** Per-type `*_from_array`/`*_to_array`
@@ -72,16 +73,17 @@ The following were verified in the wgsl-rs repository:
 - **Method receiver syntax:** `self` receiver not supported. Must use
   `Type::method(obj, args)` style (already used in plan examples).
 
-### 0.5 Add `slab_read!` / `slab_write!` to wgsl-rs (NEW WORK)
+### 0.5 `slab_read_array!` / `slab_write_array!` in wgsl-rs (DONE)
 
-wgsl-rs needs two new built-in statement-level macros for copying data between
-storage buffers and local fixed-size arrays.
+wgsl-rs now includes two built-in statement-level macros for copying data
+between storage buffers and local fixed-size arrays. These were implemented in
+wgsl-rs commit `420998a`.
 
 #### Rust-side implementation (in `wgsl_rs::std`)
 
 ```rust
 /// Copy `$size` elements from `$slab` starting at `$offset` into `$dst`.
-macro_rules! slab_read {
+macro_rules! slab_read_array {
     ($slab:expr, $offset:expr, $dst:expr, $size:expr) => {{
         let offset = $offset as usize;
         for i in 0..$size as usize {
@@ -91,7 +93,12 @@ macro_rules! slab_read {
 }
 
 /// Copy `$size` elements from `$src` into `$slab` starting at `$offset`.
-macro_rules! slab_write {
+/// The 3-argument form omits `$size` and uses `arrayLength(&slab)` in WGSL
+/// (or `$src.len()` on the CPU side).
+macro_rules! slab_write_array {
+    ($slab:expr, $offset:expr, $src:expr) => {
+        slab_write_array!($slab, $offset, $src, $src.len())
+    };
     ($slab:expr, $offset:expr, $src:expr, $size:expr) => {{
         let offset = $offset as usize;
         for i in 0..$size as usize {
@@ -103,13 +110,11 @@ macro_rules! slab_write {
 
 #### WGSL-side transpilation
 
-wgsl-rs must:
-1. Handle `syn::Stmt::Macro` in the statement parser (currently unhandled).
-2. Recognize `slab_read!` and `slab_write!` by name.
-3. Parse their four arguments: `(slab_ident, offset_expr, array_ident, size_expr)`.
-4. Emit a WGSL `for` loop.
+wgsl-rs handles `syn::Stmt::Macro` in the statement parser, recognizes
+`slab_read_array!` and `slab_write_array!` by name, parses their arguments,
+and emits WGSL `for` loops.
 
-**`slab_read!(get!(SLAB), offset, raw, SIZE)` generates:**
+**`slab_read_array!(get!(SLAB), offset, raw, SIZE)` generates:**
 
 ```wgsl
 for (var __i: u32 = 0u; __i < SIZE; __i++) {
@@ -117,7 +122,7 @@ for (var __i: u32 = 0u; __i < SIZE; __i++) {
 }
 ```
 
-**`slab_write!(get_mut!(SLAB), offset, arr, SIZE)` generates:**
+**`slab_write_array!(get_mut!(SLAB), offset, arr, SIZE)` generates:**
 
 ```wgsl
 for (var __i: u32 = 0u; __i < SIZE; __i++) {
@@ -125,21 +130,20 @@ for (var __i: u32 = 0u; __i < SIZE; __i++) {
 }
 ```
 
+**`slab_write_array!(get_mut!(SLAB), offset, arr)` (3-argument form) generates:**
+
+```wgsl
+for (var __i: u32 = 0u; __i < arrayLength(&SLAB); __i++) {
+    SLAB[offset + __i] = arr[__i];
+}
+```
+
 Note: `SIZE` can be a WGSL `const` identifier (e.g., `DATA_SLAB_SIZE`), not
 just a literal. WGSL resolves constants at compile time, so the loop bound is
 statically known. GPU drivers are expected to unroll small constant-bounded
-loops.
-
-#### wgsl-rs implementation details
-
-- Add `syn::Stmt::Macro` arm to `Stmt::try_from` in `parse.rs`
-- New AST variants: `Stmt::SlabRead { slab, offset, dest, size }` and
-  `Stmt::SlabWrite { slab, offset, src, size }`
-- WGSL codegen in `formatter.rs`: emit the `for` loop pattern
-- The synthetic loop variable `__i` needs a unique name per expansion (or a
-  fixed name if nested `slab_read!` calls don't occur in the same scope)
-
-**Estimated effort:** 3-5 days in wgsl-rs.
+loops. The 3-argument form of `slab_write_array!` is available but copies more
+than necessary when writing a fixed-size struct; prefer the 4-argument form
+with an explicit size.
 
 ---
 
@@ -224,11 +228,11 @@ pub mod data_types {
 
     // --- Generated constant ---
 
-    pub const DATA_SLAB_SIZE: u32 = 4u32;
+    pub const DATA_SLAB_SIZE: usize = 4;
 
     // --- Generated from_array function ---
 
-    pub fn data_from_array(u32s: [u32; 4]) -> Data {
+    pub fn data_from_array(u32s: [u32; DATA_SLAB_SIZE]) -> Data {
         Data {
             i: u32s[0usize],
             float_val: bitcast_f32(u32s[1usize]),
@@ -239,8 +243,8 @@ pub mod data_types {
 
     // --- Generated to_array function ---
 
-    pub fn data_to_array(d: Data) -> [u32; 4] {
-        let mut arr = [0u32; 4];
+    pub fn data_to_array(d: Data) -> [u32; DATA_SLAB_SIZE] {
+        let mut arr = [0u32; DATA_SLAB_SIZE];
         arr[0usize] = d.i;
         arr[1usize] = bitcast_u32(d.float_val);
         arr[2usize] = d.ints_0;
@@ -253,7 +257,7 @@ pub mod data_types {
 
 impl crabslab::SlabItem for data_types::Data {
     type Id = data_types::DataId;
-    const SLAB_SIZE: u32 = 4;
+    const SLAB_SIZE: usize = 4;
 
     fn slab_read(slab: &[u32], index: u32) -> Self {
         data_types::Data {
@@ -298,6 +302,7 @@ When a struct contains a nested `#[slab_item]` struct, the generated
 ```rust
 // For: pub struct ArrayChange { pub i: u32, pub change: DataChange }
 // Where DataChange has SLAB_SIZE = 4, so ArrayChange has SLAB_SIZE = 5
+// (ARRAY_CHANGE_SLAB_SIZE = 5, DATA_CHANGE_SLAB_SIZE = 4)
 
 pub fn array_change_from_array(u32s: [u32; 5]) -> ArrayChange {
     ArrayChange {
@@ -342,7 +347,7 @@ pub enum DataChangeTy {
 
 Generates:
 - `DataChangeTyId { inner: u32 }`
-- `DATA_CHANGE_TY_SLAB_SIZE: u32 = 1`
+- `DATA_CHANGE_TY_SLAB_SIZE: usize = 1`
 - `data_change_ty_from_array([u32; 1]) -> DataChangeTy` — reads the
   discriminant as `u32`. In WGSL, the enum is represented as integer constants.
 - `data_change_ty_to_array(DataChangeTy) -> [u32; 1]` — writes the
@@ -363,7 +368,7 @@ pub struct InvocationCount(pub u32);
 
 Generates:
 - `InvocationCountId { inner: u32 }`
-- `INVOCATION_COUNT_SLAB_SIZE: u32 = 1`
+- `INVOCATION_COUNT_SLAB_SIZE: usize = 1`
 - `invocation_count_from_array` / `invocation_count_to_array`
 
 This allows typed IDs for primitive slab entries.
@@ -403,7 +408,7 @@ The array type also gets its own `from_array`/`to_array` functions since
 |---|---|---|
 | ID type | `{TypeName}Id` | `DataId` |
 | Array type | `{TypeName}Array` | `DataArray` |
-| Slab size constant | `{TYPE_NAME}_SLAB_SIZE` | `DATA_SLAB_SIZE` |
+| Slab size constant | `{TYPE_NAME}_SLAB_SIZE: usize` | `DATA_SLAB_SIZE` |
 | From-array function | `{type_name}_from_array` | `data_from_array` |
 | To-array function | `{type_name}_to_array` | `data_to_array` |
 
@@ -429,17 +434,17 @@ pub trait SlabItem: Sized {
     type Id: Copy + Default;
 
     /// The number of `u32` slots this type occupies in a slab.
-    const SLAB_SIZE: u32;
+    const SLAB_SIZE: usize;
 
     /// Read this type from a `u32` slab at the given index.
-    fn slab_read(slab: &[u32], index: u32) -> Self;
+    fn slab_read(slab: &[u32], index: usize) -> Self;
 
     /// Write this type into a `u32` slab at the given index.
-    fn slab_write(data: &Self, slab: &mut [u32], index: u32);
+    fn slab_write(data: &Self, slab: &mut [u32], index: usize);
 
     /// Serialize this value into a new `Vec<u32>`.
     fn slab_data(&self) -> Vec<u32> {
-        let mut data = vec![0u32; Self::SLAB_SIZE as usize];
+        let mut data = vec![0u32; Self::SLAB_SIZE];
         Self::slab_write(self, &mut data, 0);
         data
     }
@@ -659,7 +664,7 @@ pub mod apply_data_changes {
     pub fn main(#[builtin(global_invocation_id)] global_id: Vec3u) {
         // Read the invocation descriptor from the changes slab
         let mut inv_raw = [0u32; APPLY_DATA_CHANGE_INVOCATION_SLAB_SIZE];
-        slab_read!(
+        slab_read_array!(
             get!(CHANGES_SLAB),
             ApplyDataChangeInvocationId::ZERO.inner,
             inv_raw,
@@ -675,7 +680,7 @@ pub mod apply_data_changes {
         // Read which change to apply and which data array it targets
         let info_id = AnyChangeIdArray::at(invocation.changes_ids, index);
         let mut info_raw = [0u32; ANY_CHANGE_ID_SLAB_SIZE];
-        slab_read!(
+        slab_read_array!(
             get!(CHANGES_SLAB),
             info_id.inner,
             info_raw,
@@ -685,7 +690,7 @@ pub mod apply_data_changes {
 
         // Read the change itself
         let mut change_raw = [0u32; ARRAY_CHANGE_SLAB_SIZE];
-        slab_read!(
+        slab_read_array!(
             get!(CHANGES_SLAB),
             change_info.change_id.inner,
             change_raw,
@@ -696,7 +701,7 @@ pub mod apply_data_changes {
         // Read the target data element
         let data_id = DataArray::at(change_info.data_array, change.i);
         let mut data_raw = [0u32; DATA_SLAB_SIZE];
-        slab_read!(
+        slab_read_array!(
             get!(DATA_SLAB),
             data_id.inner,
             data_raw,
@@ -706,8 +711,12 @@ pub mod apply_data_changes {
 
         // Apply the change and write back
         let new_data = DataChange::apply(change.change, data);
+        // Write back using 4-argument form (explicit size).
+        // Alternatively, the 3-argument form `slab_write_array!(get_mut!(DATA_SLAB),
+        // data_id.inner, out)` omits the size and uses `arrayLength(&DATA_SLAB)`
+        // as the loop bound in WGSL, but this copies more than necessary.
         let out = data_to_array(new_data);
-        slab_write!(
+        slab_write_array!(
             get_mut!(DATA_SLAB),
             data_id.inner,
             out,
@@ -864,7 +873,7 @@ it is correct and human-readable.
 
 The following risks from the original plan have been resolved by the
 architectural change from per-type `macro_rules!` to per-type functions +
-wgsl-rs built-in `slab_read!`/`slab_write!`:
+wgsl-rs built-in `slab_read_array!`/`slab_write_array!`:
 
 1. **`macro_rules!` inside `#[wgsl]` modules** -- RESOLVED. `macro_rules!`
    definitions pass through `#[wgsl]` (confirmed), but invocations in
@@ -875,7 +884,7 @@ wgsl-rs built-in `slab_read!`/`slab_write!`:
    function imports (`use super::wire_types::*` imports `data_from_array`,
    `data_to_array`, etc.) instead of `macro_rules!` exports.
 
-3. **`RuntimeArray<u32>` as slab type** -- LOW RISK. Confirmed working:
+3. **`RuntimeArray<u32>` as slab type** -- LOW RISK (confirmed). Confirmed working:
    `RuntimeArray<T>` transpiles to `array<T>`, `get!`/`get_mut!` strip to bare
    identifiers, indexing works. Multiple working examples in wgsl-rs.
 
@@ -884,13 +893,23 @@ wgsl-rs built-in `slab_read!`/`slab_write!`:
    literal element by element from the outer array's indices and calls the
    inner `from_array` function. This is verbose but correct.
 
+8. **`slab_read_array!`/`slab_write_array!` wgsl-rs implementation** --
+   RESOLVED. Implemented in wgsl-rs commit `420998a`. Statement-level macro
+   handling (`syn::Stmt::Macro`) is supported, with `SlabRead` and `SlabWrite`
+   AST variants and WGSL `for` loop codegen. Both the 4-argument form
+   (explicit size) and the 3-argument `slab_write_array!` form
+   (`arrayLength`-based) are available.
+
 ### Remaining Risks
 
-4. **Atomic counter pattern** -- MODERATE RISK (unchanged). The current code
-   atomically increments a counter at a specific slab index. In WGSL, atomics
-   require the `Atomic<T>` type. An `Atomic<u32>` cannot exist at an arbitrary
-   index within a `RuntimeArray<u32>`. Solutions:
-   - Separate storage binding with an `Atomic<u32>` struct
+4. **Atomic counter pattern** -- LOW RISK. wgsl-rs has full atomic support:
+   `Atomic<u32>`, `Atomic<i32>`, all 11 WGSL atomic builtins (`atomic_add`,
+   `atomic_load`, `atomic_store`, etc.), and workgroup atomics via
+   `workgroup!(COUNTER: Atomic<u32>)`. The current code atomically increments
+   a counter at a specific slab index. In WGSL, an `Atomic<u32>` cannot exist
+   at an arbitrary index within a `RuntimeArray<u32>`, so a separate storage
+   binding is the right approach:
+   - Separate storage binding with an `Atomic<u32>` struct (recommended)
    - Workgroup-scoped atomic variables
    - Drop atomic counting if it's only used for test validation
 
@@ -918,15 +937,6 @@ wgsl-rs built-in `slab_read!`/`slab_write!`:
 
 ### New Risks
 
-8. **`slab_read!`/`slab_write!` wgsl-rs implementation** -- MODERATE RISK.
-   Requires new statement-level macro handling in wgsl-rs (`syn::Stmt::Macro`
-   is currently unhandled). This is well-scoped but novel -- no precedent for
-   statement-level macro expansion in wgsl-rs. The implementation needs:
-   - A new arm in `Stmt::try_from` for `syn::Stmt::Macro`
-   - New AST variants for `SlabRead` and `SlabWrite`
-   - WGSL codegen emitting `for` loops
-   - A synthetic loop variable name (`__i` or similar)
-
 9. **Nested `from_array` verbosity** -- LOW RISK. For deeply nested types, the
    generated `*_from_array` functions build inner array literals element by
    element. This is verbose in generated code but correct and bounded by type
@@ -939,7 +949,8 @@ wgsl-rs built-in `slab_read!`/`slab_write!`:
 
 11. **No generics in WGSL** -- LOW RISK. Each `*_from_array`/`*_to_array`
     function is concrete (specific to one type with a fixed array size). The
-    `slab_read!`/`slab_write!` macros handle the generic storage access layer.
+    `slab_read_array!`/`slab_write_array!` macros handle the generic storage
+    access layer.
 
 ---
 
@@ -948,7 +959,7 @@ wgsl-rs built-in `slab_read!`/`slab_write!`:
 | Phase | Duration | Prerequisites |
 |---|---|---|
 | Phase 0.1-0.4: wgsl-rs verification | Done | None |
-| Phase 0.5: `slab_read!`/`slab_write!` in wgsl-rs | 3-5 days | None |
+| Phase 0.5: `slab_read_array!`/`slab_write_array!` in wgsl-rs | Done | None |
 | Phase 1: `#[slab_module]` macro | 1-1.5 weeks | Phase 0.5 |
 | Phase 2: New `SlabItem` trait | 1 week | Phase 1 |
 | Phase 3: Update `craballoc` | 1 week | Phase 2 |
@@ -957,7 +968,7 @@ wgsl-rs built-in `slab_read!`/`slab_write!`:
 | Phase 6: Cleanup | 2-3 days | Phase 5 |
 | Phase 7: Testing | 1 week | Phase 6 |
 
-**Total estimate: ~6-7 weeks**
+**Total estimate: ~5-6 weeks**
 
 ---
 
@@ -972,15 +983,15 @@ wgsl-rs built-in `slab_read!`/`slab_write!`:
 6. The `#[slab_item]` annotation generates correct ID types, array types,
    `*_from_array`/`*_to_array` functions, and slab size constants for structs,
    tuple structs, and `#[repr(u32)]` enums
-7. `slab_read!`/`slab_write!` macros work in both Rust (CPU-side) and WGSL
-   (GPU-side) contexts
+7. `slab_read_array!`/`slab_write_array!` macros work in both Rust (CPU-side)
+   and WGSL (GPU-side) contexts
 
 ## Status
 
 These are the tasks left "todo" in this plan:
 
 * [x] Phase 0.1-0.4: wgsl-rs verification
-* [ ] Phase 0.5: `slab_read!`/`slab_write!` in wgsl-rs
+* [x] Phase 0.5: `slab_read_array!`/`slab_write_array!` in wgsl-rs
 * [ ] Phase 1: `#[slab_module]` macro
 * [ ] Phase 2: New `SlabItem` trait
 * [ ] Phase 3: Update `craballoc`
