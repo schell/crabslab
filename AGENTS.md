@@ -6,9 +6,9 @@ Guidelines for AI agents working in the crabslab repository.
 
 `crabslab` is a slab allocator focused on marshalling data between CPUs and GPUs.
 The project is migrating from `rust-gpu`/SPIR-V to `wgsl-rs` (Rust-to-WGSL
-transpilation). The migration plan lives in `plans/` -- see
-`plans/2026-02-14-wgsl-rs-buildout.md` for the current buildout plan and source
-of truth for all migration decisions.
+transpilation). The migration plan lives in `plans/2026-02-14-wgsl-buildout/` -- see
+`plans/2026-02-14-wgsl-buildout/README.md` for the overview and index of all
+phase documents, which are the source of truth for all migration decisions.
 
 ### Workspace Structure
 
