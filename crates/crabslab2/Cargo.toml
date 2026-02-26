@@ -1,0 +1,10 @@
+[package]
+name = "crabslab2"
+version = "0.1.0"
+edition = "2024"
+description = "Slab allocator for CPU/GPU data marshalling via wgsl-rs"
+repository = "https://github.com/schell/crabslab"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+crabslab2-macros = { path = "../crabslab2-macros" }

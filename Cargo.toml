@@ -1,10 +1,7 @@
 [workspace]
 members = [
-    "crates/craballoc",
-    "crates/craballoc-test-shaders",
-    "crates/craballoc-test-wire-types",
-    "crates/crabslab",
-    "crates/crabslab-derive",
+    "crates/crabslab2",
+    "crates/crabslab2-macros",
 ]
 
 # 'shaders' contains a test spirv shader to measure filesize when using crabslab
