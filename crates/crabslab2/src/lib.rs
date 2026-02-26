@@ -27,7 +27,7 @@ pub use crabslab2_macros::{slab_item, slab_module};
 /// # Example
 ///
 /// ```
-/// use crabslab2::{slab_read, slab_write, SlabItem};
+/// use crabslab2::{SlabItem, slab_read, slab_write};
 ///
 /// let val = 42u32;
 /// let mut slab = [0u32; 4];
@@ -130,7 +130,8 @@ impl SlabItem for bool {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
+    #![allow(clippy::approx_constant)]
     use super::*;
 
     #[test]
@@ -219,8 +220,8 @@ mod test {
             assert_eq!(v.to_bits(), rt.to_bits());
         }
 
-        assert_eq!(true, bool::from_array(true.to_array()));
-        assert_eq!(false, bool::from_array(false.to_array()));
+        assert!(bool::from_array(true.to_array()));
+        assert!(!bool::from_array(false.to_array()));
     }
 
     // -----------------------------------------------------------------------
@@ -228,7 +229,7 @@ mod test {
     // -----------------------------------------------------------------------
 
     #[slab_module]
-    mod test_types {
+    pub mod test_types {
         #[slab_item]
         #[derive(Clone, Copy, Debug, Default, PartialEq)]
         pub struct Data {
