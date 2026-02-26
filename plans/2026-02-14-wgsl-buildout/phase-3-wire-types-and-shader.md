@@ -1,20 +1,24 @@
-# Phase 4: Migrate Wire Types (`craballoc-test-wire-types`)
+# Phase 3: Wire Types and Compute Shader (Test Modules)
 
 **Status:** Pending
-**Estimated effort:** 3-4 days
-**Prerequisites:** Phases 1, 2
+**Estimated effort:** 1 week
+**Prerequisites:** Phase 2
 
 ## Overview
 
-Rewrite the `craballoc-test-wire-types` crate to use `#[slab_module]` /
-`#[slab_item]`, flatten tuples to individual fields, move CPU-only helpers
-outside the WGSL module, and handle atomic operations.
+Rewrite the wire types and compute shader as `#[cfg(test)]` modules inside
+`craballoc`, using `#[slab_module]` / `#[slab_item]` and wgsl-rs's
+`linkage-wgpu` feature. The separate `craballoc-test-shaders` and
+`craballoc-test-wire-types` crates are no longer needed.
 
 ---
 
-## 4.1 Rewrite as `#[slab_module]`
+## 3.1 Wire types as a test module
+
+Move the wire type definitions into a `#[cfg(test)]` module inside `craballoc`:
 
 ```rust
+#[cfg(test)]
 #[slab_module]
 pub mod wire_types {
     use wgsl_rs::std::*;
@@ -44,10 +48,7 @@ pub mod wire_types {
     }
 
     impl DataChange {
-        #[wgsl_allow(non_literal_match_statement_patterns)]
         pub fn apply(change: DataChange, data: Data) -> Data {
-            // NOTE: match must be a statement, not an expression.
-            // wgsl-rs rejects match in expression context.
             let mut result = data;
             match change.ty {
                 DataChangeTy::I => {
@@ -105,42 +106,56 @@ pub mod wire_types {
 
 ---
 
-## 4.2 Tuple flattening
-
-Current code uses tuples like `(u32, u32)` for `Data.ints`. WGSL has no tuples.
-These are flattened to `ints_0: u32, ints_1: u32`.
-
----
-
-## 4.3 CPU-only helpers
-
-CPU-only code (like `Display` impls, `DataChange::new()` constructors that use
-`SlabItem` generics) lives **outside** the `#[slab_module]` module:
+## 3.2 Compute shader as a test module
 
 ```rust
-// Outside the #[wgsl] module -- CPU-only
-impl core::fmt::Display for wire_types::DataChange {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // ...
+#[cfg(test)]
+#[slab_module]
+pub mod apply_data_changes {
+    use wgsl_rs::std::*;
+    use super::wire_types::*;
+
+    storage!(group(0), binding(0), read_write, DATA_SLAB: RuntimeArray<u32>);
+    storage!(group(0), binding(1), CHANGES_SLAB: RuntimeArray<u32>);
+
+    #[compute]
+    #[workgroup_size(16, 1, 1)]
+    pub fn main(#[builtin(global_invocation_id)] global_id: Vec3u) {
+        // Read invocation descriptor, apply changes, write back
+        // (same logic as Phase 5 in the original plan)
     }
 }
 ```
 
 ---
 
-## 4.4 Atomic operations
+## 3.3 Tuple flattening
 
-The current `spirv_std::arch::atomic_i_increment` for invocation counting is
-replaced with wgsl-rs's `atomic_add`. This requires a separate `Atomic<u32>`
-storage variable, since atomics on arbitrary indices within a
-`RuntimeArray<u32>` are not directly supported in WGSL.
+Current code uses tuples like `(u32, u32)` for `Data.ints`. WGSL has no tuples.
+These are flattened to `ints_0: u32, ints_1: u32`.
 
-Options:
-- Use a separate `storage!(group(0), binding(2), read_write, COUNTERS: Counters)`
-  where `Counters` contains `Atomic<u32>` fields
-- Use `workgroup!` variables for workgroup-scoped atomic counters
-- Drop atomic counting if it's only used for test validation
+---
 
-wgsl-rs has full atomic support: `Atomic<u32>`, `Atomic<i32>`, all 11 WGSL
-atomic builtins (`atomic_add`, `atomic_load`, `atomic_store`, etc.), and
-workgroup atomics via `workgroup!(COUNTER: Atomic<u32>)`.
+## 3.4 CPU-only helpers
+
+CPU-only code (like `Display` impls) lives **outside** the `#[slab_module]`
+module, gated behind `#[cfg(test)]`.
+
+---
+
+## 3.5 Atomic operations
+
+Atomic counters for invocation counting use wgsl-rs's `atomic_add` with a
+separate `Atomic<u32>` storage binding.
+
+---
+
+## 3.6 Use `linkage-wgpu` for wgpu integration
+
+Enable wgsl-rs's `linkage-wgpu` feature. The `#[wgsl]` macro generates:
+- `apply_data_changes::linkage::shader_module(device)`
+- `apply_data_changes::linkage::bind_group_0::layout(device)`
+- `apply_data_changes::linkage::main::WORKGROUP_SIZE`
+
+Update `TestBackendWgpu` to use the generated linkage instead of manual pipeline
+setup.

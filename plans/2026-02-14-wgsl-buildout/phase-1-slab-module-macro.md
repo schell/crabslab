@@ -1,4 +1,4 @@
-# Phase 1: New `#[slab_module]` Proc-Macro (in `crabslab-derive`)
+# Phase 1: `crabslab2` and `#[slab_module]` Proc-Macro
 
 **Status:** In Progress
 **Estimated effort:** 1-1.5 weeks
@@ -6,12 +6,86 @@
 
 ## Overview
 
-Repurpose `crates/crabslab-derive` to contain the `#[slab_module]` attribute
-macro alongside (initially) the existing `#[derive(SlabItem)]`.
+Remove old crates from the workspace, create `crates/crabslab2` (core library)
+and `crates/crabslab2-macros` (proc-macro crate), define the new `SlabItem`
+trait, implement `#[slab_module]` and `#[slab_item]` attribute macros, and
+provide primitive `SlabItem` impls.
 
 ---
 
-## 1.1 `#[slab_module]` macro behavior
+## 1.1 Workspace changes
+
+Remove the following from workspace members (they remain on disk for reference):
+- `crates/crabslab`
+- `crates/crabslab-derive`
+- `crates/craballoc-test-shaders`
+- `crates/craballoc-test-wire-types`
+
+Add new workspace members:
+- `crates/crabslab2`
+- `crates/crabslab2-macros`
+
+`crates/craballoc` stays as a workspace member but will not compile until
+Phase 2.
+
+---
+
+## 1.2 The `SlabItem` trait (`crabslab2`)
+
+```rust
+/// CPU-side trait for types that can be stored in a `u32` slab.
+///
+/// Auto-implemented by the `#[slab_module]` macro for `#[slab_item]` types.
+/// Can also be implemented manually for primitive types.
+pub trait SlabItem: Sized + 'static {
+    /// The number of `u32` slots this type occupies in a slab.
+    const SLAB_SIZE: usize;
+
+    /// The fixed-size `[u32; N]` array type for this slab item.
+    type Array: AsRef<[u32]> + AsMut<[u32]> + Default;
+
+    /// Serialize this value into a `[u32; N]` array.
+    fn to_array(&self) -> Self::Array;
+
+    /// Deserialize a value from a `[u32; N]` array.
+    fn from_array(arr: Self::Array) -> Self;
+}
+```
+
+Helper functions (free functions in `crabslab2`):
+
+```rust
+/// Read a `SlabItem` from a `u32` slice at the given index.
+pub fn slab_read<T: SlabItem>(slab: &[u32], index: usize) -> T {
+    let mut arr = T::Array::default();
+    arr.as_mut().copy_from_slice(&slab[index..index + T::SLAB_SIZE]);
+    T::from_array(arr)
+}
+
+/// Write a `SlabItem` into a `u32` slice at the given index.
+pub fn slab_write<T: SlabItem>(slab: &mut [u32], index: usize, val: &T) {
+    let arr = val.to_array();
+    slab[index..index + T::SLAB_SIZE].copy_from_slice(arr.as_ref());
+}
+```
+
+---
+
+## 1.3 Primitive `SlabItem` impls
+
+Manual impls for `u32`, `i32`, `f32`, and `bool`. No tuples, no glam types
+(wgsl-rs provides its own vector/matrix types).
+
+| Type | `SLAB_SIZE` | `type Array` | Notes |
+|---|---|---|---|
+| `u32` | 1 | `[u32; 1]` | Identity |
+| `i32` | 1 | `[u32; 1]` | Bitcast |
+| `f32` | 1 | `[u32; 1]` | `to_bits` / `from_bits` |
+| `bool` | 1 | `[u32; 1]` | `1` = true, `0` = false |
+
+---
+
+## 1.4 `#[slab_module]` macro behavior
 
 **Input:** A Rust module annotated with `#[slab_module]`:
 
@@ -114,31 +188,33 @@ pub mod data_types {
 
 // --- Generated OUTSIDE the #[wgsl] module (CPU-only trait impl) ---
 
-impl crabslab::SlabItem for data_types::Data {
-    type Id = data_types::DataId;
+impl crabslab2::SlabItem for data_types::Data {
     const SLAB_SIZE: usize = 4;
+    type Array = [u32; 4];
 
-    fn slab_read(slab: &[u32], index: u32) -> Self {
-        data_types::Data {
-            i: slab[index as usize],
-            float_val: f32::from_bits(slab[(index + 1) as usize]),
-            ints_0: slab[(index + 2) as usize],
-            ints_1: slab[(index + 3) as usize],
-        }
+    fn to_array(&self) -> [u32; 4] {
+        [
+            self.i,
+            self.float_val.to_bits(),
+            self.ints_0,
+            self.ints_1,
+        ]
     }
 
-    fn slab_write(data: &Self, slab: &mut [u32], index: u32) {
-        slab[index as usize] = data.i;
-        slab[(index + 1) as usize] = data.float_val.to_bits();
-        slab[(index + 2) as usize] = data.ints_0;
-        slab[(index + 3) as usize] = data.ints_1;
+    fn from_array(arr: [u32; 4]) -> Self {
+        data_types::Data {
+            i: arr[0],
+            float_val: f32::from_bits(arr[1]),
+            ints_0: arr[2],
+            ints_1: arr[3],
+        }
     }
 }
 ```
 
 ---
 
-## 1.2 Type mapping rules for `from_array` / `to_array`
+## 1.5 Type mapping rules for `from_array` / `to_array`
 
 | Rust Field Type | Slab Size | `from_array` Expression | `to_array` Expression |
 |---|---|---|---|
@@ -157,7 +233,7 @@ impl crabslab::SlabItem for data_types::Data {
 
 ---
 
-## 1.3 Nested struct handling
+## 1.6 Nested struct handling
 
 When a struct contains a nested `#[slab_item]` struct, the generated
 `from_array` function builds an inner array literal element by element:
@@ -165,7 +241,6 @@ When a struct contains a nested `#[slab_item]` struct, the generated
 ```rust
 // For: pub struct ArrayChange { pub i: u32, pub change: DataChange }
 // Where DataChange has SLAB_SIZE = 4, so ArrayChange has SLAB_SIZE = 5
-// (ARRAY_CHANGE_SLAB_SIZE = 5, DATA_CHANGE_SLAB_SIZE = 4)
 
 pub fn array_change_from_array(u32s: [u32; 5]) -> ArrayChange {
     ArrayChange {
@@ -191,12 +266,9 @@ pub fn array_change_to_array(d: ArrayChange) -> [u32; 5] {
 }
 ```
 
-This is verbose but correct, and the inner function calls cross module
-boundaries normally.
-
 ---
 
-## 1.4 Enum support
+## 1.7 Enum support
 
 For `#[repr(u32)]` enums annotated with `#[slab_item]`:
 
@@ -213,20 +285,12 @@ pub enum DataChangeTy {
 Generates:
 - `DataChangeTyId { inner: u32 }`
 - `DATA_CHANGE_TY_SLAB_SIZE: usize = 1`
-- `data_change_ty_from_array([u32; 1]) -> DataChangeTy` -- reads the
-  discriminant as `u32`. In WGSL, the enum is represented as integer constants.
-- `data_change_ty_to_array(DataChangeTy) -> [u32; 1]` -- writes the
-  discriminant.
-
-When a struct field has a `#[repr(u32)]` enum type, `from_array` reads a `u32`
-from the array and the Rust side reconstructs the enum. In WGSL, the enum is
-integer constants, so the field is effectively `u32`.
+- `data_change_ty_from_array([u32; 1]) -> DataChangeTy`
+- `data_change_ty_to_array(DataChangeTy) -> [u32; 1]`
 
 ---
 
-## 1.5 Tuple struct / primitive wrapper support
-
-`#[slab_item]` supports tuple structs wrapping primitives:
+## 1.8 Tuple struct / primitive wrapper support
 
 ```rust
 #[slab_item]
@@ -238,11 +302,9 @@ Generates:
 - `INVOCATION_COUNT_SLAB_SIZE: usize = 1`
 - `invocation_count_from_array` / `invocation_count_to_array`
 
-This allows typed IDs for primitive slab entries.
-
 ---
 
-## 1.6 Array type generation
+## 1.9 Array type generation
 
 Every `#[slab_item]` type gets a corresponding array type:
 
@@ -273,7 +335,7 @@ The array type also gets its own `from_array`/`to_array` functions since
 
 ---
 
-## 1.7 Naming conventions
+## 1.10 Naming conventions
 
 | Generated Item | Naming Pattern | Example |
 |---|---|---|
@@ -283,5 +345,18 @@ The array type also gets its own `from_array`/`to_array` functions since
 | From-array function | `{type_name}_from_array` | `data_from_array` |
 | To-array function | `{type_name}_to_array` | `data_to_array` |
 
-All generated function names use snake_case to ensure uniqueness when imported
-via glob across modules.
+---
+
+## 1.11 Implementation steps
+
+| Step | Description |
+|---|---|
+| 1 | Remove `crabslab`, `crabslab-derive`, `craballoc-test-shaders`, `craballoc-test-wire-types` from workspace members |
+| 2 | Create `crates/crabslab2-macros` with skeleton `#[slab_module]` / `#[slab_item]` |
+| 3 | Create `crates/crabslab2` with `SlabItem` trait, primitive impls, `slab_read`/`slab_write` helpers |
+| 4 | Implement `#[slab_item]` code generation for structs (ID, Array, slab size, from/to array) |
+| 5 | Implement `#[slab_module]` outer wrapper (strip `#[slab_item]`, emit `#[wgsl]`, emit CPU trait impls) |
+| 6 | Add enum support |
+| 7 | Add tuple struct support |
+| 8 | Add nested struct support |
+| 9 | Integration tests (CPU round-trip, WGSL validation) |
