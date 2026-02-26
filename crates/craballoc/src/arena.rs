@@ -13,7 +13,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crabslab::{Array, Id, Slab, SlabItem};
+use crabslab2::{slab_read, slab_write, SlabItem};
 use snafu::OptionExt;
 
 use crate::{
@@ -23,6 +23,22 @@ use crate::{
     update::{CpuUpdateSource, GpuUpdates, SourceId, Update, UpdateManager, UpdateSummary},
     Error, NoInternalBufferSnafu,
 };
+
+/// Read `count` items of type `T` from a `u32` slice, starting at offset 0.
+fn slab_read_vec<T: SlabItem>(slab: &[u32], count: usize) -> Vec<T> {
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        out.push(slab_read::<T>(slab, i * T::SLAB_SIZE));
+    }
+    out
+}
+
+/// Write a slice of `T` items into a `u32` slice, starting at offset 0.
+fn slab_write_slice<T: SlabItem>(slab: &mut [u32], items: &[T]) {
+    for (i, item) in items.iter().enumerate() {
+        slab_write(slab, i * T::SLAB_SIZE, item);
+    }
+}
 
 pub trait CanUpdateFromCpu {}
 
@@ -81,23 +97,22 @@ impl<T: ?Sized, S> Clone for Value<T, S> {
 }
 
 impl<T: Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
-    /// Return the [`Id<T>`] that points to this `T` on the slab.
-    pub fn id(&self) -> Id<T> {
-        Id::new(self.update_source.source_id().range.first_index)
+    /// Return the raw `u32` slab index of this value.
+    pub fn id(&self) -> u32 {
+        self.update_source.source_id().range.first_index
     }
 
-    /// Return the [`Array<T>`] that defines this type's range in the
-    /// slab.
-    pub fn array(&self) -> Array<T> {
-        Array::new(self.id(), 1)
+    /// Return the `(index, len)` pair describing this value's slab region.
+    pub fn array(&self) -> (u32, u32) {
+        (self.id(), 1)
     }
 
     /// Modify the inner value, queing an update to the GPU.
     pub fn modify<X>(&self, f: impl FnOnce(&mut T) -> X) -> X {
         self.update_source.modify(|data| {
-            let mut t = data.read(Id::<T>::ZERO);
+            let mut t = slab_read::<T>(data, 0);
             let x = f(&mut t);
-            data.write(Id::ZERO, &t);
+            slab_write(data, 0, &t);
             x
         })
     }
@@ -109,8 +124,7 @@ impl<T: Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
 
     /// Get a copy of the value from the local CPU cache.
     pub fn get(&self) -> T {
-        self.update_source
-            .read(|data| data.read_unchecked(Id::ZERO))
+        self.update_source.read(|data| slab_read::<T>(data, 0))
     }
 }
 
@@ -146,10 +160,9 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
         };
 
         self.update_source.modify_range(range, |data| {
-            let array = Array::new(Id::ZERO, len);
-            let mut s = data.read_vec(array);
+            let mut s = slab_read_vec::<T>(data, len as usize);
             let x = f(&mut s);
-            data.write_array(array, &s);
+            slab_write_slice(data, &s);
             x
         })
     }
@@ -157,10 +170,11 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
     /// Read a range of the inner value.
     pub fn read_range<X>(&self, range: impl Into<Range>, f: impl FnOnce(&[T]) -> X) -> X {
         let input_range = self.sanitize_range(range);
-        let starting_id = Id::<T>::new(input_range.first_index * T::SLAB_SIZE as u32);
-        let item_range_array = Array::new(starting_id, input_range.len());
+        let start = input_range.first_index as usize * T::SLAB_SIZE;
+        let count = input_range.len() as usize;
         self.update_source.read(|data| {
-            let mut s = data.read_vec(item_range_array);
+            let sub = &data[start..start + count * T::SLAB_SIZE];
+            let mut s = slab_read_vec::<T>(sub, count);
             f(&mut s)
         })
     }
@@ -180,13 +194,11 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
         self.read_range(.., |data| data.to_vec())
     }
 
-    /// Returns the [`Array`] that these values occupy in the slab.
-    pub fn array(&self) -> Array<T> {
+    /// Returns the `(index, len)` pair describing this array's slab region.
+    pub fn array(&self) -> (u32, u32) {
+        let first_index = self.update_source.source_id().range.first_index;
         let len = self.len() as u32;
-        Array {
-            id: Id::new(self.update_source.source_id().range.first_index),
-            len,
-        }
+        (first_index, len)
     }
 
     /// Returns the ranges that have been updated since last commit.
@@ -302,7 +314,8 @@ impl<R: IsRuntime> Arena<R> {
     ///
     /// This value has bidirectional synchonization.
     pub fn new_value<T: SlabItem>(&self, value: T) -> Value<T> {
-        let update_source = self.new_update_source(value.slab_data(), std::any::type_name::<T>());
+        let update_source =
+            self.new_update_source(value.to_array().as_ref().to_vec(), std::any::type_name::<T>());
         Value {
             update_source,
             _phantom: PhantomData,
@@ -314,7 +327,7 @@ impl<R: IsRuntime> Arena<R> {
     /// These values have bidirectional synchronization.
     pub fn new_array<T: SlabItem>(&self, values: impl IntoIterator<Item = T>) -> Value<[T]> {
         let data = values.into_iter().fold(vec![], |mut acc, value| {
-            acc.extend(value.slab_data());
+            acc.extend(value.to_array().as_ref());
             acc
         });
         let update_source = self.new_update_source(data, std::any::type_name::<[T]>());
@@ -335,20 +348,23 @@ impl<R: IsRuntime> Arena<R> {
     }
 
     #[cfg(test)]
-    pub async fn read_slab<T: SlabItem>(&self, array: Array<T>) -> Result<Vec<T>, crate::Error> {
+    pub async fn read_slab<T: SlabItem>(
+        &self,
+        array: (u32, u32),
+    ) -> Result<Vec<T>, crate::Error> {
+        let (index, len) = array;
         let buffer = self.commit();
         let buffer_len = self.bump_allocator.capacity();
-        let u32_array = array.into_u32_array();
-        let range = u32_array.starting_index()..(u32_array.starting_index() + u32_array.len());
+        let u32_count = len as usize * T::SLAB_SIZE;
+        let range = index as usize..index as usize + u32_count;
         let data = self
             .bump_allocator
             .runtime()
             .buffer_read(&buffer, buffer_len as usize, range)
             .await?;
-        let mut output = vec![];
-        let output_array = Array::new(Id::<T>::ZERO, array.len);
-        for id in output_array.iter() {
-            output.push(data.read_unchecked(id));
+        let mut output = Vec::with_capacity(len as usize);
+        for i in 0..len as usize {
+            output.push(slab_read::<T>(&data, i * T::SLAB_SIZE));
         }
         Ok(output)
     }

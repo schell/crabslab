@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/craballoc",
     "crates/crabslab2",
     "crates/crabslab2-macros",
 ]

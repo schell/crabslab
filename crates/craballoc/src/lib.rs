@@ -13,16 +13,15 @@ mod update;
 
 pub mod prelude {
     //! Easy-include prelude module.
-    pub extern crate crabslab;
     pub use super::arena::{Arena, Value};
     pub use super::runtime::CpuRuntime;
     #[cfg(feature = "wgpu")]
     pub use super::runtime::WgpuRuntime;
-    pub use crabslab::{Array, Id};
+    pub use crabslab2::{slab_read, slab_write, SlabItem};
 }
 
 #[cfg(doc)]
-use prelude::crabslab::SlabItem;
+use crabslab2::SlabItem;
 #[cfg(doc)]
 use prelude::*;
 

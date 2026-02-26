@@ -2,8 +2,6 @@
 
 use std::ops::{Index, IndexMut};
 
-use crabslab::{Array, Id, SlabItem};
-
 use crate::update::{SourceId, Update};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -15,26 +13,6 @@ pub struct Range {
 impl core::fmt::Debug for Range {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(&format!("{}..={}", self.first_index, self.last_index))
-    }
-}
-
-impl<T: SlabItem> From<Array<T>> for Range {
-    fn from(array: Array<T>) -> Self {
-        let array = array.into_u32_array();
-        let first_index = array.starting_index() as u32;
-        Range {
-            first_index,
-            last_index: first_index + array.len() as u32 - 1,
-        }
-    }
-}
-
-impl<T: SlabItem> From<Id<T>> for Range {
-    fn from(id: Id<T>) -> Self {
-        Range {
-            first_index: id.inner(),
-            last_index: id.inner() + T::SLAB_SIZE as u32 - 1,
-        }
     }
 }
 
@@ -372,7 +350,10 @@ impl<R: IsRange + std::fmt::Debug> RangeAccumulator<R> {
                     // Check the last two ranges for continuity
                     self.merge_last_gap_if_possible();
                 } else {
-                    log::trace!("      overwriting right portion of existing_range and carrying the remainder");
+                    log::trace!(
+                        "      overwriting right portion of existing_range and carrying the \
+                         remainder"
+                    );
                     // Split off the overlapping portion of input_range and merge it into
                     // existing_range, then put the remainder back to check against the
                     // other ranges.
@@ -451,13 +432,14 @@ impl<R: IsRange + std::fmt::Debug> RangeManager<R> {
 
     /// Add a range to the manager.
     ///
-    /// Internally the manager will merge the range and maintain a non-overlapping,
-    /// disjoint and ordered list of ranges. This results in the smallest possible number of
-    /// updates when used to manage buffer updates.
+    /// Internally the manager will merge the range and maintain a
+    /// non-overlapping, disjoint and ordered list of ranges. This results
+    /// in the smallest possible number of updates when used to manage
+    /// buffer updates.
     ///
-    /// O(n) worst case time complexity. In actuality it ends up being quite a bit better than
-    /// that because the ranges are coalesced into disjoint regions. So `n` is proportional to
-    /// the sparcity of the input ranges.
+    /// O(n) worst case time complexity. In actuality it ends up being quite a
+    /// bit better than that because the ranges are coalesced into disjoint
+    /// regions. So `n` is proportional to the sparcity of the input ranges.
     pub fn insert(&mut self, input_range: R) {
         let acc = RangeAccumulator {
             visited_ranges: vec![],
@@ -475,7 +457,8 @@ impl RangeManager<Range> {
     /// Removes a range of `count` elements, if possible.
     ///
     /// If `Some` was returned, either a `Range` was found that was
-    /// exactly of size `count`, or `count` spaces were removed from an existing `Range`.
+    /// exactly of size `count`, or `count` spaces were removed from an existing
+    /// `Range`.
     pub fn remove(&mut self, count: u32) -> Option<Range> {
         let mut remove_index = usize::MAX;
         for (i, range) in self.ranges.iter_mut().enumerate() {

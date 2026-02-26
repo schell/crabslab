@@ -131,8 +131,8 @@ fn assert_ranges_are_non_overlapping(ranges: &[Range]) {
     }
 }
 
-/// During insertion any overlapping or contiguous ranges should have been merged,
-/// meaning we only have disjoint ranges.
+/// During insertion any overlapping or contiguous ranges should have been
+/// merged, meaning we only have disjoint ranges.
 fn assert_ranges_are_disjoint(ranges: &[Range]) {
     for i in 0..ranges.len() {
         let (mut left, mut right) = ranges.split_at(i);

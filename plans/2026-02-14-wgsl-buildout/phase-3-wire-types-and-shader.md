@@ -93,7 +93,9 @@ pub mod wire_types {
     }
 
     #[slab_item]
-    pub struct InvocationCount(pub u32);
+    pub struct InvocationCount {
+        pub inner: u32,
+    }
 
     #[slab_item]
     pub struct ApplyDataChangeInvocation {

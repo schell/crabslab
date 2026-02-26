@@ -46,8 +46,9 @@ crates.
    position).
 5. **`#[slab_module]`** is a proc-macro that processes `#[slab_item]`
    annotations, generates ID types + `*_from_array`/`*_to_array` functions +
-   CPU trait impls, then replaces itself with `#[wgsl]` so wgsl-rs transpiles
-   the module to WGSL.
+   CPU trait impls. To get WGSL transpilation, stack `#[wgsl]` on top:
+   `#[wgsl] #[slab_module] mod my_types { ... }`. Rust expands the innermost
+   attribute first, so `#[slab_module]` runs before `#[wgsl]`.
 6. **wgpu integration** uses wgsl-rs's `linkage-wgpu` feature for
    auto-generated shader modules, bind group layouts, and pipeline helpers.
 7. **No backward compatibility.** The old crates are removed from the workspace
@@ -62,7 +63,7 @@ crates.
 |---|---|---|---|---|
 | 0 | [Prerequisites](phase-0-prerequisites.md) | Done | None | Complete |
 | 1 | [Slab Module Macro](phase-1-slab-module-macro.md) | 1-1.5 weeks | Phase 0 | Complete |
-| 2 | [Craballoc Update](phase-2-craballoc-update.md) | 1 week | Phase 1 | Pending |
+| 2 | [Craballoc Update](phase-2-craballoc-update.md) | 1 week | Phase 1 | Complete |
 | 3 | [Wire Types & Compute Shader](phase-3-wire-types-and-shader.md) | 1 week | Phase 2 | Pending |
 | 4 | [Cleanup & Rename](phase-4-cleanup.md) | 2-3 days | Phase 3 | Pending |
 | 5 | [Testing](phase-5-testing.md) | 1 week | Phase 4 | Pending |
