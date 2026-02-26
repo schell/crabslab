@@ -8,3 +8,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 crabslab2-macros = { path = "../crabslab2-macros" }
+wgsl-rs = { workspace = true }
