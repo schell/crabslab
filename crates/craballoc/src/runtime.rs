@@ -250,7 +250,10 @@ impl IsRuntime for WgpuRuntime {
         });
         tracing::trace_span!("poll").in_scope(|| {
             self.device
-                .poll(wgpu::PollType::WaitForSubmissionIndex(submission_index))
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission_index),
+                    timeout: None,
+                })
                 .context(PollSnafu)
         })?;
         rx.recv()

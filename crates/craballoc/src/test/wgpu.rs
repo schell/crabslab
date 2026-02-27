@@ -54,7 +54,7 @@ impl TestBackendWgpu {
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("test"),
                     bind_group_layouts: &[&bindgroup_layout],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
         let module = runtime.device.create_shader_module(shader());
         let pipeline = runtime
@@ -114,7 +114,10 @@ impl BackendUpdate for GpuUpdateTest<WgpuRuntime, TestBackendWgpu> {
         let submission = runtime.queue.submit(Some(encoder.finish()));
         runtime
             .device
-            .poll(wgpu::PollType::WaitForSubmissionIndex(submission))
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
             .unwrap();
     }
 }
