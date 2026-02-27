@@ -1,4 +1,4 @@
-//! Proc-macros for `crabslab2`.
+//! Proc-macros for `crabslab`.
 //!
 //! Provides `#[slab_module]` and `#[slab_item]` attribute macros for
 //! generating slab serialization code that works on both CPU (Rust) and
@@ -20,7 +20,7 @@ use syn::{parse_macro_input, spanned::Spanned};
 /// - An `impl` block with `SLAB_SIZE`, `from_array`, `to_array`
 /// - A concrete ID type (`{TypeName}Id`)
 /// - A concrete array type (`{TypeName}Array`)
-/// - `impl crabslab2::SlabItem` proxies for all generated types
+/// - `impl crabslab::SlabItem` proxies for all generated types
 ///
 /// Trait impls are emitted inside the module so that `#[wgsl]` can pass
 /// them through to Rust without generating WGSL.
@@ -507,7 +507,7 @@ fn generate_array_type(
     vec![array_struct, array_impl]
 }
 
-/// Generate CPU-side `impl crabslab2::SlabItem` proxies for a type, its
+/// Generate CPU-side `impl crabslab::SlabItem` proxies for a type, its
 /// ID type, and its array type.
 fn generate_trait_impls(
     type_name: &syn::Ident,
@@ -540,14 +540,14 @@ fn parse_u32_expr(expr: &syn::Expr) -> syn::Result<u32> {
     }
 }
 
-/// Generate a `impl crabslab2::SlabItem for Type` proxy that delegates
+/// Generate a `impl crabslab::SlabItem for Type` proxy that delegates
 /// to the inherent `Type::SLAB_SIZE`, `Type::from_array`, `Type::to_array`.
 ///
 /// Emitted inside the module so that `#[wgsl]` can pass it through to
 /// Rust without generating WGSL.
 fn generate_slab_item_proxy(type_name: &syn::Ident) -> syn::Item {
     syn::parse_quote! {
-        impl crabslab2::SlabItem for #type_name {
+        impl crabslab::SlabItem for #type_name {
             const SLAB_SIZE: usize = #type_name::SLAB_SIZE;
             type Array = [u32; #type_name::SLAB_SIZE];
 

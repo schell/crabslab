@@ -14,7 +14,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crabslab2::{slab_read, slab_write, SlabItem};
+use crabslab::{slab_read, slab_write, SlabItem};
 use snafu::OptionExt;
 
 use crate::{

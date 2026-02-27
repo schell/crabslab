@@ -18,7 +18,7 @@ use crate::{
 
 #[allow(clippy::needless_late_init)]
 #[wgsl_rs::wgsl(skip_validation)]
-#[crabslab2::slab_module]
+#[crabslab::slab_module]
 pub mod apply_data_changes {
     use wgsl_rs::std::*;
 

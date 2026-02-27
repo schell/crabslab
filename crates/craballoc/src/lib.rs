@@ -17,11 +17,11 @@ pub mod prelude {
     pub use super::runtime::CpuRuntime;
     #[cfg(feature = "wgpu")]
     pub use super::runtime::WgpuRuntime;
-    pub use crabslab2::{slab_read, slab_write, SlabItem};
+    pub use crabslab::{slab_read, slab_write, SlabItem};
 }
 
 #[cfg(doc)]
-use crabslab2::SlabItem;
+use crabslab::SlabItem;
 #[cfg(doc)]
 use prelude::*;
 

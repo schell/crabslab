@@ -1,12 +1,9 @@
 [workspace]
 members = [
     "crates/craballoc",
-    "crates/crabslab2",
-    "crates/crabslab2-macros",
+    "crates/crabslab",
+    "crates/crabslab-macros",
 ]
-
-# 'shaders' contains a test spirv shader to measure filesize when using crabslab
-exclude = ["./shaders"]
 
 resolver = "2"
 
@@ -21,10 +18,6 @@ pretty_assertions = "1.4.1"
 proptest = "1.9.0"
 rustc-hash = "1.1"
 snafu = "0.8"
-spirv-std = { git = "https://github.com/rust-gpu/rust-gpu.git", rev = "b3eda4df9814b6176d3c0844eb67f70a22ebb378" }
 tracing = "0.1.41"
-wgpu = { version = "28.0.0", features = ["spirv"] }
+wgpu = { version = "28.0.0" }
 wgsl-rs = { git = "https://github.com/schell/wgsl-rs", subdirectory = "crates/wgsl-rs" }
-
-[patch.crates-io]
-spirv-std = { git = "https://github.com/rust-gpu/rust-gpu.git", rev = "b3eda4df9814b6176d3c0844eb67f70a22ebb378" }

@@ -65,7 +65,7 @@ crates.
 | 1 | [Slab Module Macro](phase-1-slab-module-macro.md) | 1-1.5 weeks | Phase 0 | Complete |
 | 2 | [Craballoc Update](phase-2-craballoc-update.md) | 1 week | Phase 1 | Complete |
 | 3 | [Wire Types & Compute Shader](phase-3-wire-types-and-shader.md) | 1 week | Phase 2 | Complete |
-| 4 | [Cleanup & Rename](phase-4-cleanup.md) | 2-3 days | Phase 3 | Pending |
+| 4 | [Cleanup & Rename](phase-4-cleanup.md) | 2-3 days | Phase 3 | Complete |
 | 5 | [Testing](phase-5-testing.md) | 1 week | Phase 4 | Pending |
 
 **Total estimate: ~4-5 weeks**
