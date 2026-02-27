@@ -15,10 +15,11 @@ const ATOMIC_ORDERING: std::sync::atomic::Ordering = std::sync::atomic::Ordering
 
 /// Manages a runtime buffer.
 ///
-/// The `BumpAllocator` is responsible for allocating contiguous u32 ranges on the
-/// slab. It maintains a count of the number of u32 slots allocated (the length)
-/// and the number of u32 slots available to be allocated (the capacity).
-/// It resizes the buffer during commit when allocations would overrun the capacity.
+/// The `BumpAllocator` is responsible for allocating contiguous u32 ranges on
+/// the slab. It maintains a count of the number of u32 slots allocated (the
+/// length) and the number of u32 slots available to be allocated (the
+/// capacity). It resizes the buffer during commit when allocations would
+/// overrun the capacity.
 pub struct BumpAllocator<R: IsRuntime> {
     label: Arc<Cow<'static, str>>,
 
@@ -139,8 +140,8 @@ impl<R: IsRuntime> BumpAllocator<R> {
         )
     }
 
-    /// Recreate the internal buffer, writing the contents of the previous buffer (if it
-    /// exists) to the new one, then return the new buffer.
+    /// Recreate the internal buffer, writing the contents of the previous
+    /// buffer (if it exists) to the new one, then return the new buffer.
     fn recreate_buffer(&self) -> SlabBuffer<R::Buffer> {
         // Create the new buffer
         log::trace!("recreating buffer '{}'", self.label);
@@ -164,13 +165,15 @@ impl<R: IsRuntime> BumpAllocator<R> {
         slab_buffer
     }
 
-    /// Allocate `spaces` u32 slots in the buffer, resizing the buffer if needed.
+    /// Allocate `spaces` u32 slots in the buffer, resizing the buffer if
+    /// needed.
     ///
     /// Returns the range of u32 slots allocated.
     ///
     /// ## Note
-    /// Keep in mind that the `Range` returned is not [`craballoc::range::Range`](crate::range::Range),
-    /// **not** the `Range` in `std`.
+    /// Keep in mind that the `Range` returned is not
+    /// [`craballoc::range::Range`](crate::range::Range), **not** the
+    /// `Range` in `std`.
     pub fn alloc(&self, spaces: NonZeroU32) -> Range {
         let spaces = u32::from(spaces);
         let mut capacity = self.buffer_capacity.write().unwrap();
@@ -203,11 +206,13 @@ impl<R: IsRuntime> BumpAllocator<R> {
         guard.as_ref().cloned()
     }
 
-    /// Perform upkeep on the slab, synchronizing changes to the internal buffer.
+    /// Perform upkeep on the slab, synchronizing changes to the internal
+    /// buffer.
     ///
     /// Changes made to allocated values stored on this slab are not committed
     /// until this function has been called, and sometimes not until the runtime
-    /// has finished synchronizing the CPU to the GPU (eg with `wgpu::Device::poll`).
+    /// has finished synchronizing the CPU to the GPU (eg with
+    /// `wgpu::Device::poll`).
     ///
     /// The internal buffer is not created until the after the first time this
     /// function is called.

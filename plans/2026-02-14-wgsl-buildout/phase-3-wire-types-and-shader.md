@@ -1,163 +1,85 @@
 # Phase 3: Wire Types and Compute Shader (Test Modules)
 
-**Status:** Pending
+**Status:** Complete
 **Estimated effort:** 1 week
 **Prerequisites:** Phase 2
 
 ## Overview
 
-Rewrite the wire types and compute shader as `#[cfg(test)]` modules inside
-`craballoc`, using `#[slab_module]` / `#[slab_item]` and wgsl-rs's
-`linkage-wgpu` feature. The separate `craballoc-test-shaders` and
+Rewrite the wire types and compute shader as a single `#[wgsl] #[slab_module]`
+module inside `craballoc/src/test.rs`, using wgsl-rs for WGSL transpilation and
+CPU-side dispatch. The separate `craballoc-test-shaders` and
 `craballoc-test-wire-types` crates are no longer needed.
 
 ---
 
-## 3.1 Wire types as a test module
+## Implementation Notes
 
-Move the wire type definitions into a `#[cfg(test)]` module inside `craballoc`:
+### Single module approach
 
-```rust
-#[cfg(test)]
-#[slab_module]
-pub mod wire_types {
-    use wgsl_rs::std::*;
+Unlike the original plan which had separate `wire_types` and
+`apply_data_changes` modules, the final implementation uses a **single**
+`#[wgsl] #[slab_module] mod apply_data_changes` module containing both the wire
+types and the compute shader. This avoids cross-module import issues inside
+`#[wgsl]` modules.
 
-    #[slab_item]
-    pub struct Data {
-        pub i: u32,
-        pub float_val: f32,
-        pub ints_0: u32,
-        pub ints_1: u32,
-    }
+### Wire types
 
-    #[slab_item]
-    #[repr(u32)]
-    pub enum DataChangeTy {
-        I = 0,
-        Float = 1,
-        Ints = 2,
-    }
+All `#[slab_item]` types derive `Clone, Copy, Debug, Default` (and `PartialEq`
+for `Data`). The `#[slab_module]` macro does NOT auto-derive these on the
+annotated types — only on the generated companion types (`*Id`, `*Array`).
 
-    #[slab_item]
-    pub struct DataChange {
-        pub ty: DataChangeTy,
-        pub data_0: u32,
-        pub data_1: u32,
-        pub data_2: u32,
-    }
+- `Data` — `{ i: u32, float_val: f32, ints_0: u32, ints_1: u32 }`
+- `DataChangeTy` — `#[repr(u32)]` enum with `#[default]` on `I = 0`
+- `DataChange` — `{ ty: DataChangeTy, data_0: u32, data_1: u32, data_2: u32 }`
+  with `DataChange::apply(change, data) -> Data` method
+- `ArrayChange` — `{ i: u32, change: DataChange }`
+- `AnyChangeId` — `{ change_id: ArrayChangeId, data_array: DataArray }`
+- `ApplyDataChangeInvocation` — `{ changes_ids: AnyChangeIdArray }`
 
-    impl DataChange {
-        pub fn apply(change: DataChange, data: Data) -> Data {
-            let mut result = data;
-            match change.ty {
-                DataChangeTy::I => {
-                    result = Data {
-                        i: change.data_0,
-                        float_val: data.float_val,
-                        ints_0: data.ints_0,
-                        ints_1: data.ints_1,
-                    };
-                },
-                DataChangeTy::Float => {
-                    result = Data {
-                        i: data.i,
-                        float_val: bitcast_f32(change.data_0),
-                        ints_0: data.ints_0,
-                        ints_1: data.ints_1,
-                    };
-                },
-                _ => {
-                    result = Data {
-                        i: data.i,
-                        float_val: data.float_val,
-                        ints_0: change.data_0,
-                        ints_1: change.data_1,
-                    };
-                },
-            }
-            result
-        }
-    }
+The `InvocationCount` type from the original plan was dropped. Invocation
+counters use separate `Atomic<u32>` storage bindings instead of being embedded
+in the slab.
 
-    #[slab_item]
-    pub struct ArrayChange {
-        pub i: u32,
-        pub change: DataChange,
-    }
+### Compute shader
 
-    #[slab_item]
-    pub struct AnyChangeId {
-        pub change_id: ArrayChangeId,
-        pub data_array: DataArray,
-    }
+The `main` entry point uses:
+- 4 storage bindings: `DATA_SLAB` (read_write RuntimeArray), `CHANGES_SLAB`
+  (read-only RuntimeArray), `INVOCATIONS_RAN` (read_write Atomic), and
+  `INVOCATIONS_SKIPPED` (read_write Atomic)
+- `slab_read_array!` / `slab_write_array!` macros with explicit `[0u32, ...]`
+  array literals (wgsl-rs does not support `[0u32; N]` repeat expressions)
+- Statement-form `match` with `#[wgsl_allow(non_literal_match_statement_patterns)]`
 
-    #[slab_item]
-    pub struct InvocationCount {
-        pub inner: u32,
-    }
+### CPU dispatch
 
-    #[slab_item]
-    pub struct ApplyDataChangeInvocation {
-        pub changes_ids: AnyChangeIdArray,
-        pub invocations_id: InvocationCountId,
-        pub invocations_skipped_id: InvocationCountId,
-    }
-}
-```
+The `BackendUpdate` impl for `CpuRuntime` uses:
+- `Storage::set()` to populate storage statics before dispatch
+- Direct function calls to `apply_data_changes::main(vec3u(i, j, k))` in a
+  loop (not `dispatch_workgroups`, to keep the dispatch logic explicit)
+- `atomic_load()` to read counters back after dispatch
+
+### wgsl-rs discoveries
+
+- `#[allow(clippy::...)]` attributes inside `#[wgsl]` modules break the parser.
+  Place them on the module itself.
+- `#[default]` on enum variants works correctly through `#[wgsl]`/`#[slab_module]`.
+- Feature unification: when `craballoc` enables `wgsl-rs/linkage-wgpu`, the
+  `#[wgsl]` macro emits `wgpu`-referencing code for all crates in the workspace.
+  `crabslab2` needed `wgpu` added as a dev-dependency to compile.
 
 ---
 
-## 3.2 Compute shader as a test module
+## Tests
 
-```rust
-#[cfg(test)]
-#[slab_module]
-pub mod apply_data_changes {
-    use wgsl_rs::std::*;
-    use super::wire_types::*;
+All 18 craballoc tests pass (7 previously gated tests re-enabled):
+- `gpu_update_test_sanity_on_cpu`
+- `gpu_array_update_test_sanity_on_cpu`
+- `invocations_sanity`
+- `regression`
+- `workgroup_dimensions_to_id_sanity`
+- `proptest_gpu_updates_checked_on_cpu`
+- Plus all 11 previously passing tests
 
-    storage!(group(0), binding(0), read_write, DATA_SLAB: RuntimeArray<u32>);
-    storage!(group(0), binding(1), CHANGES_SLAB: RuntimeArray<u32>);
-
-    #[compute]
-    #[workgroup_size(16, 1, 1)]
-    pub fn main(#[builtin(global_invocation_id)] global_id: Vec3u) {
-        // Read invocation descriptor, apply changes, write back
-        // (same logic as Phase 5 in the original plan)
-    }
-}
-```
-
----
-
-## 3.3 Tuple flattening
-
-Current code uses tuples like `(u32, u32)` for `Data.ints`. WGSL has no tuples.
-These are flattened to `ints_0: u32, ints_1: u32`.
-
----
-
-## 3.4 CPU-only helpers
-
-CPU-only code (like `Display` impls) lives **outside** the `#[slab_module]`
-module, gated behind `#[cfg(test)]`.
-
----
-
-## 3.5 Atomic operations
-
-Atomic counters for invocation counting use wgsl-rs's `atomic_add` with a
-separate `Atomic<u32>` storage binding.
-
----
-
-## 3.6 Use `linkage-wgpu` for wgpu integration
-
-Enable wgsl-rs's `linkage-wgpu` feature. The `#[wgsl]` macro generates:
-- `apply_data_changes::linkage::shader_module(device)`
-- `apply_data_changes::linkage::bind_group_0::layout(device)`
-- `apply_data_changes::linkage::main::WORKGROUP_SIZE`
-
-Update `TestBackendWgpu` to use the generated linkage instead of manual pipeline
-setup.
+GPU (wgpu) backend tests are deferred as a follow-up — the `TestBackendWgpu`
+struct needs updating to use `linkage-wgpu` generated pipeline code.

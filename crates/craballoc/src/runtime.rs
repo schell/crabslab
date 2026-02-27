@@ -13,8 +13,8 @@ use crate::{AsyncRecvSnafu, AsyncSnafu, Error, PollSnafu};
 
 /// Represents the runtime that provides the interface to the GPU buffer.
 ///
-/// For example, this could be a struct that contains `wgpu::Device` and `wgpu::Queue`,
-/// or it could be a struct that contains Vulkan types, etc.
+/// For example, this could be a struct that contains `wgpu::Device` and
+/// `wgpu::Queue`, or it could be a struct that contains Vulkan types, etc.
 pub trait IsRuntime: Clone {
     /// The type of buffer this runtime engages with.
     type Buffer;
@@ -22,8 +22,8 @@ pub trait IsRuntime: Clone {
     /// The type used to denote the configuration of the buffer.
     type BufferUsages: Clone;
 
-    /// Create a new buffer with the given `capacity`, where `capacity` is the number of `u32`s
-    /// that can be stored in the buffer.
+    /// Create a new buffer with the given `capacity`, where `capacity` is the
+    /// number of `u32`s that can be stored in the buffer.
     fn buffer_create(
         &self,
         capacity: usize,

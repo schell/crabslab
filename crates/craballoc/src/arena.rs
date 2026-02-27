@@ -1,11 +1,12 @@
 //! An arena allocator built on a `u32` slab.
 //!
 //! [`Arena`] provides an API to dynamically allocate types that
-//! implement [`SlabItem`] from the CPU, and then synchronize those changes to the backend
-//! during [`Arena::commit`].
-//! [`Arena`] also provides synchronization _back_ from the backend using [`Arena::sychronize`].
-//! All values are set to synchronize from the backend by default and must be explicitly set
-//! to opt-out of synchronization with `TODO: add sync opt-out`.
+//! implement [`SlabItem`] from the CPU, and then synchronize those changes to
+//! the backend during [`Arena::commit`].
+//! [`Arena`] also provides synchronization _back_ from the backend using
+//! [`Arena::sychronize`]. All values are set to synchronize from the backend by
+//! default and must be explicitly set to opt-out of synchronization with `TODO:
+//! add sync opt-out`.
 use std::{
     borrow::Cow,
     marker::PhantomData,
@@ -42,12 +43,13 @@ fn slab_write_slice<T: SlabItem>(slab: &mut [u32], items: &[T]) {
 
 pub trait CanUpdateFromCpu {}
 
-/// Value is automatically synchronized from CPU to GPU on commit and back on sync.
+/// Value is automatically synchronized from CPU to GPU on commit and back on
+/// sync.
 pub struct SyncBidirectional;
 impl CanUpdateFromCpu for SyncBidirectional {}
 
-/// Value is synchronized from CPU to the GPU on commit, but changes on the GPU do
-/// not roundtrip automatically.
+/// Value is synchronized from CPU to the GPU on commit, but changes on the GPU
+/// do not roundtrip automatically.
 pub struct SyncOneWayFromCpu;
 impl CanUpdateFromCpu for SyncOneWayFromCpu {}
 
@@ -140,7 +142,8 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
         self.len() == 0
     }
 
-    /// Sanitizes the range to ensure that it fits within the bounds of these values.
+    /// Sanitizes the range to ensure that it fits within the bounds of these
+    /// values.
     fn sanitize_range(&self, range: impl Into<Range>) -> Range {
         let total_len = self.len() as u32;
         let mut range = range.into();
@@ -314,8 +317,10 @@ impl<R: IsRuntime> Arena<R> {
     ///
     /// This value has bidirectional synchonization.
     pub fn new_value<T: SlabItem>(&self, value: T) -> Value<T> {
-        let update_source =
-            self.new_update_source(value.to_array().as_ref().to_vec(), std::any::type_name::<T>());
+        let update_source = self.new_update_source(
+            value.to_array().as_ref().to_vec(),
+            std::any::type_name::<T>(),
+        );
         Value {
             update_source,
             _phantom: PhantomData,
@@ -348,10 +353,7 @@ impl<R: IsRuntime> Arena<R> {
     }
 
     #[cfg(test)]
-    pub async fn read_slab<T: SlabItem>(
-        &self,
-        array: (u32, u32),
-    ) -> Result<Vec<T>, crate::Error> {
+    pub async fn read_slab<T: SlabItem>(&self, array: (u32, u32)) -> Result<Vec<T>, crate::Error> {
         let (index, len) = array;
         let buffer = self.commit();
         let buffer_len = self.bump_allocator.capacity();
@@ -372,17 +374,19 @@ impl<R: IsRuntime> Arena<R> {
     /// Returns an iterator of [`SourceId`]s of all currently live [`Value`]s.
     ///
     /// ## Note
-    /// Keep in mind that the returned [`SourceId`]s are only valid until the next
-    /// commit.
+    /// Keep in mind that the returned [`SourceId`]s are only valid until the
+    /// next commit.
     pub fn get_live_source_ids(&self) -> impl Iterator<Item = SourceId> {
         self.update_manager.get_managed_source_ids().into_iter()
     }
 
-    /// Perform upkeep on the slab, synchronizing changes to the internal buffer.
+    /// Perform upkeep on the slab, synchronizing changes to the internal
+    /// buffer.
     ///
     /// Changes made to allocated values stored on the underlying slab are not
-    /// committed until this function has been called, and sometimes not until the runtime
-    /// has finished synchronizing the CPU to the GPU (eg with `wgpu::Device::poll`).
+    /// committed until this function has been called, and sometimes not until
+    /// the runtime has finished synchronizing the CPU to the GPU (eg with
+    /// `wgpu::Device::poll`).
     ///
     /// The internal buffer is not created until the after the first time this
     /// function is called.
@@ -423,7 +427,8 @@ impl<R: IsRuntime> Arena<R> {
 
     /// Synchronize CPU-cached values with the backend.
     ///
-    /// This reads portions of the backend slab and writes them back to their CPU cache sources.
+    /// This reads portions of the backend slab and writes them back to their
+    /// CPU cache sources.
     ///
     /// ## Errors
     /// Errs if

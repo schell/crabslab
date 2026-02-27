@@ -123,8 +123,9 @@ impl CpuUpdateSource {
 
     /// Read the inner data, if any, returning `T`.
     ///
-    /// In the case this `CpuUpdateSource` represents a [`OneWayFromGpu`](crate::arena::OneWayFromGpu)
-    /// value, the slice provided to the given closure will be empty.
+    /// In the case this `CpuUpdateSource` represents a
+    /// [`OneWayFromGpu`](crate::arena::OneWayFromGpu) value, the slice
+    /// provided to the given closure will be empty.
     pub fn read<T>(&self, f: impl FnOnce(&[u32]) -> T) -> T {
         let guard = self.data.read().unwrap();
         f(&guard.data)
@@ -132,11 +133,12 @@ impl CpuUpdateSource {
 
     /// Modify the inner data, if any, returning `T`.
     ///
-    /// In the case this `CpuUpdateSource` represents a [`OneWayFromGpu`](crate::arena::OneWayFromGpu)
-    /// value, the slice provided to the given closure will be empty.
+    /// In the case this `CpuUpdateSource` represents a
+    /// [`OneWayFromGpu`](crate::arena::OneWayFromGpu) value, the slice
+    /// provided to the given closure will be empty.
     ///
-    /// This marks the data as updated, which will cause the data to be sent to the GPU
-    /// on the next commit.
+    /// This marks the data as updated, which will cause the data to be sent to
+    /// the GPU on the next commit.
     pub fn modify<T>(&self, f: impl FnOnce(&mut [u32]) -> T) -> T {
         let mut guard = self.data.write().unwrap();
         let t = f(&mut guard.data);
@@ -150,11 +152,12 @@ impl CpuUpdateSource {
 
     /// Modify the inner data, if any, returning `T`.
     ///
-    /// In the case this `CpuUpdateSource` represents a [`OneWayFromGpu`](crate::arena::OneWayFromGpu)
-    /// value, the slice provided to the given closure will be empty.
+    /// In the case this `CpuUpdateSource` represents a
+    /// [`OneWayFromGpu`](crate::arena::OneWayFromGpu) value, the slice
+    /// provided to the given closure will be empty.
     ///
-    /// This marks the data as updated, which will cause the data to be sent to the GPU
-    /// on the next commit.
+    /// This marks the data as updated, which will cause the data to be sent to
+    /// the GPU on the next commit.
     pub fn modify_range<T>(&self, range: Range, f: impl FnOnce(&mut [u32]) -> T) -> T {
         let mut guard = self.data.write().unwrap();
 
@@ -222,10 +225,11 @@ impl std::fmt::Debug for Update {
 
 #[derive(Default)]
 pub struct GpuUpdates {
-    /// CPU data requesting a GPU update, keyed by the range it occupies on the slab.
+    /// CPU data requesting a GPU update, keyed by the range it occupies on the
+    /// slab.
     ///
-    /// Source ranges may be contiguous with each other, but must _not_ (and _will not_)
-    /// be overlapping.
+    /// Source ranges may be contiguous with each other, but must _not_ (and
+    /// _will not_) be overlapping.
     sources: BTreeMap<Range, Weak<RwLock<SynchronizationData>>>,
 }
 
@@ -252,8 +256,8 @@ impl GpuUpdates {
     pub fn apply(&mut self, updates: Vec<Update>) {
         let mut updates = updates.into_iter();
         let mut sources = std::mem::take(&mut self.sources).into_iter();
-        // One update may apply to more than one source, as the requests have been coalesced
-        // into disjoint ranges.
+        // One update may apply to more than one source, as the requests have been
+        // coalesced into disjoint ranges.
         //
         // Both updates and sources are ordered.
         let mut next_update = updates.next();
@@ -289,15 +293,18 @@ impl GpuUpdates {
                     log::trace!("    took chunk {update_chunk:?}");
                     log::trace!("    remaining update is now: {update:?}");
 
-                    // If we can upgrade the source (ie it hasn't been dropped) then write the updated
-                    // data to the source.
+                    // If we can upgrade the source (ie it hasn't been dropped) then write the
+                    // updated data to the source.
                     if let Some(source_data) = weak_source_data.upgrade() {
                         let mut guard = source_data.write().unwrap();
                         guard.data.copy_from_slice(&update_chunk.data);
                         // Save this source for the next commit+synchronize invocation
                         self.insert(source_range, &source_data);
                     } else {
-                        log::trace!("    slab range {source_range:?} was dropped between calls to commit and synchronize");
+                        log::trace!(
+                            "    slab range {source_range:?} was dropped between calls to commit \
+                             and synchronize"
+                        );
                     }
 
                     // Put the remainder of the update, if any
@@ -392,13 +399,14 @@ impl UpdateManager {
         FxHashSet::from_iter(self.cpu_cache.read().unwrap().keys().copied())
     }
 
-    /// Returns whether any update sources have queued updates waiting to be committed.
+    /// Returns whether any update sources have queued updates waiting to be
+    /// committed.
     pub fn has_queued_updates(&self) -> bool {
         !self.notifier_receiver.is_empty() || !self.update_queue.read().unwrap().is_empty()
     }
 
-    /// Return the ids of all sources that require updating as a result of their CPU caches
-    /// being invalidated.
+    /// Return the ids of all sources that require updating as a result of their
+    /// CPU caches being invalidated.
     ///
     /// This clears the update `SourceId`s from their sources and stores
     /// them for use during the next commit, returning a clone of all updated
@@ -424,10 +432,11 @@ impl UpdateManager {
         cpu_cache_set.clone()
     }
 
-    /// Clear the updates in the queue and convert them into a managed set of ranges.
+    /// Clear the updates in the queue and convert them into a managed set of
+    /// ranges.
     ///
-    /// This ensures that an entire frame of updates is coalesced into the smallest
-    /// number of buffer writes as is possible.
+    /// This ensures that an entire frame of updates is coalesced into the
+    /// smallest number of buffer writes as is possible.
     pub fn clear_updated_sources(&self) -> UpdateSummary {
         log::trace!("clearing updated sources and generating the update summary");
         // Ranges of the slab that will be updated from the CPU
@@ -471,7 +480,10 @@ impl UpdateManager {
                                     data: sync_data_guard.data[local_range].to_vec(),
                                     range: slab_range,
                                 };
-                                log::trace!("updating {id} from CPU, local range: {local_range:?}, slab range: {slab_range:?}");
+                                log::trace!(
+                                    "updating {id} from CPU, local range: {local_range:?}, slab \
+                                     range: {slab_range:?}"
+                                );
                                 cpu_update_ranges.insert(update_data);
                             }
                         }
@@ -497,8 +509,8 @@ impl UpdateManager {
                         false
                     }
                 } else {
-                    // This source is not being tracked by the CPU cache, don't track it for backend updates,
-                    // as there is no cache value to synchronize.
+                    // This source is not being tracked by the CPU cache, don't track it for backend
+                    // updates, as there is no cache value to synchronize.
                     false
                 }
             });

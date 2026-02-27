@@ -28,3 +28,4 @@ env_logger.workspace = true
 futures-lite.workspace = true
 pretty_assertions.workspace = true
 proptest.workspace = true
+wgsl-rs = { workspace = true, features = ["linkage-wgpu"] }
