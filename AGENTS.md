@@ -20,23 +20,27 @@ phase documents, which are the source of truth for all migration decisions.
 
 ## Build, Test, and Lint Commands
 
+**IMPORTANT:** Always use `cargo nextest run` instead of `cargo test` for this
+workspace. Several craballoc tests share global wgsl-rs storage statics and will
+interfere with each other under `cargo test`'s in-process parallelism.
+`cargo nextest run` isolates each test in its own process.
+
 ```bash
 # Build
 cargo build
 cargo build --release
 
-# Test (all tests)
-cargo test
+# Test (all tests) — always use nextest
 cargo nextest run -j 1          # CI uses nextest with single job for GPU tests
+cargo nextest run                # Also fine; process isolation prevents conflicts
 
 # Run a single test
-cargo test test_name
-cargo test test_name -- --nocapture   # With output
 cargo nextest run test_name -j 1
+cargo nextest run test_name -j 1 --no-capture   # With output
 
 # Run tests in a specific crate
-cargo test -p crabslab
-cargo test -p craballoc
+cargo nextest run -p crabslab2
+cargo nextest run -p craballoc
 
 # Lint and format
 cargo fmt
