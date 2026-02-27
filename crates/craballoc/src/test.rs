@@ -13,12 +13,11 @@ use crate::{
 };
 
 // ---------------------------------------------------------------------------
-// Wire types + compute shader — single #[wgsl] #[slab_module] module.
+// Wire types + compute shader — single #[slab_module(wgsl(...))] module.
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::needless_late_init)]
-#[wgsl_rs::wgsl(skip_validation)]
-#[crabslab::slab_module]
+#[crabslab::slab_module(wgsl(skip_validation))]
 pub mod apply_data_changes {
     use wgsl_rs::std::*;
 

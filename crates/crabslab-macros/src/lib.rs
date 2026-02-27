@@ -10,6 +10,83 @@ use quote::{format_ident, quote};
 use syn::{parse_macro_input, spanned::Spanned};
 
 // ---------------------------------------------------------------------------
+// Attribute parsing for #[slab_module(...)]
+// ---------------------------------------------------------------------------
+
+/// Parsed attributes from `#[slab_module(...)]`.
+///
+/// Supported parameters (comma-separated):
+///
+/// - `wgsl_crate = <path>` — Override the path to the `wgsl_rs` crate. Default:
+///   `wgsl_rs`. Used to emit `#[<path>::wgsl(...)]`.
+///
+/// - `wgsl(...)` — Forward parameters to `#[wgsl_rs::wgsl(...)]`. When present
+///   (even with no inner args), the macro emits a `#[<wgsl_crate>::wgsl(...)]`
+///   attribute on the output module. When absent, no `#[wgsl]` attribute is
+///   emitted.
+///
+/// # Examples
+///
+/// ```ignore
+/// #[slab_module]                                  // no #[wgsl] emitted
+/// #[slab_module(wgsl(skip_validation))]           // emits #[wgsl_rs::wgsl(skip_validation)]
+/// #[slab_module(wgsl())]                          // emits #[wgsl_rs::wgsl]
+/// #[slab_module(wgsl_crate = my_crate, wgsl())]  // emits #[my_crate::wgsl]
+/// ```
+struct SlabModuleAttrs {
+    /// Path to the `wgsl_rs` crate. Default: `wgsl_rs`.
+    wgsl_crate: syn::Path,
+    /// If `wgsl(...)` was present, the inner tokens to forward.
+    /// `Some(empty)` means `wgsl()` — emit `#[wgsl]` with no args.
+    /// `None` means no `wgsl` group — don't emit `#[wgsl]`.
+    wgsl_args: Option<TokenStream2>,
+}
+
+impl Default for SlabModuleAttrs {
+    fn default() -> Self {
+        Self {
+            wgsl_crate: syn::parse_quote!(wgsl_rs),
+            wgsl_args: None,
+        }
+    }
+}
+
+impl syn::parse::Parse for SlabModuleAttrs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut attrs = SlabModuleAttrs::default();
+
+        while !input.is_empty() {
+            let ident: syn::Ident = input.parse()?;
+
+            if ident == "wgsl_crate" {
+                input.parse::<syn::Token![=]>()?;
+                attrs.wgsl_crate = input.parse()?;
+            } else if ident == "wgsl" {
+                let content;
+                syn::parenthesized!(content in input);
+                let inner: TokenStream2 = content.parse()?;
+                attrs.wgsl_args = Some(inner);
+            } else {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    format!(
+                        "unknown #[slab_module] parameter '{ident}', expected 'wgsl_crate' or \
+                         'wgsl'"
+                    ),
+                ));
+            }
+
+            // Consume optional trailing comma.
+            if !input.is_empty() {
+                input.parse::<syn::Token![,]>()?;
+            }
+        }
+
+        Ok(attrs)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Public proc-macro entry points
 // ---------------------------------------------------------------------------
 
@@ -26,10 +103,19 @@ use syn::{parse_macro_input, spanned::Spanned};
 /// them through to Rust without generating WGSL.
 ///
 /// Auto-injects `use wgsl_rs::std::*;` if not already present.
+///
+/// When a `wgsl(...)` parameter group is present, the macro replaces
+/// itself with `#[wgsl_rs::wgsl(...)]` on the output module, ensuring
+/// that `#[wgsl]` always runs *after* companion types have been
+/// generated. This eliminates the need to manually stack both
+/// attributes and removes the macro ordering footgun.
+///
+/// See [`SlabModuleAttrs`] for the full list of parameters.
 #[proc_macro_attribute]
-pub fn slab_module(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn slab_module(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attrs = parse_macro_input!(attr as SlabModuleAttrs);
     let module = parse_macro_input!(item as syn::ItemMod);
-    match process_module(module) {
+    match process_module(module, &attrs) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -49,7 +135,10 @@ pub fn slab_item(_attr: TokenStream, item: TokenStream) -> TokenStream {
 // Module processing
 // ---------------------------------------------------------------------------
 
-fn process_module(mut module: syn::ItemMod) -> syn::Result<TokenStream2> {
+fn process_module(
+    mut module: syn::ItemMod,
+    macro_attrs: &SlabModuleAttrs,
+) -> syn::Result<TokenStream2> {
     let mod_name = &module.ident;
 
     let Some((brace, ref items)) = module.content else {
@@ -59,6 +148,8 @@ fn process_module(mut module: syn::ItemMod) -> syn::Result<TokenStream2> {
         ));
     };
 
+    let wgsl_crate = &macro_attrs.wgsl_crate;
+
     // Collect generated items (all inside the module).
     let mut new_items: Vec<syn::Item> = Vec::new();
     let mut has_wgsl_std_import = false;
@@ -66,8 +157,8 @@ fn process_module(mut module: syn::ItemMod) -> syn::Result<TokenStream2> {
     // Process each item in the module.
     let mut processed_items: Vec<syn::Item> = Vec::new();
     for item in items {
-        // Check for `use wgsl_rs::std::*;`
-        if is_wgsl_std_import(item) {
+        // Check for `use <wgsl_crate>::std::*;`
+        if is_wgsl_std_import(item, wgsl_crate) {
             has_wgsl_std_import = true;
         }
 
@@ -107,10 +198,10 @@ fn process_module(mut module: syn::ItemMod) -> syn::Result<TokenStream2> {
         }
     }
 
-    // Auto-inject `use wgsl_rs::std::*;` if missing.
+    // Auto-inject `use <wgsl_crate>::std::*;` if missing.
     if !has_wgsl_std_import {
         let import: syn::Item = syn::parse_quote! {
-            use wgsl_rs::std::*;
+            use #wgsl_crate::std::*;
         };
         processed_items.insert(0, import);
     }
@@ -122,12 +213,28 @@ fn process_module(mut module: syn::ItemMod) -> syn::Result<TokenStream2> {
     module.content = Some((brace, processed_items));
 
     // Emit the module (trait impls are now inside).
+    // If `wgsl(...)` was specified, prepend `#[<wgsl_crate>::wgsl(...)]` so
+    // that the compiler expands `#[wgsl]` in a subsequent pass — after all
+    // companion types have been generated.
     let vis = &module.vis;
-    let attrs = &module.attrs;
+    let module_attrs = &module.attrs;
     let content = &module.content.as_ref().unwrap().1;
 
+    let wgsl_attr = match &macro_attrs.wgsl_args {
+        Some(args) if !args.is_empty() => {
+            quote! { #[#wgsl_crate::wgsl(#args)] }
+        }
+        Some(_) => {
+            quote! { #[#wgsl_crate::wgsl] }
+        }
+        None => {
+            quote! {}
+        }
+    };
+
     Ok(quote! {
-        #(#attrs)*
+        #wgsl_attr
+        #(#module_attrs)*
         #vis mod #mod_name {
             #(#content)*
         }
@@ -220,16 +327,17 @@ impl StructInfo {
         let offsets = cumulative_offsets(&self.fields);
 
         // from_array: read each field from the u32 array.
-        let from_array_fields: Vec<TokenStream2> = self
-            .fields
-            .iter()
-            .zip(offsets.iter())
-            .map(|(f, offset)| {
-                let fname = &f.name;
-                let read_expr = field_from_array_expr(&f.ty, offset);
-                quote! { #fname: #read_expr }
-            })
-            .collect();
+        // For nested types, we generate pre-computation statements
+        // (sub-array reads) before the struct literal, since WGSL does
+        // not support block expressions as struct field initializers.
+        let mut from_array_preamble: Vec<TokenStream2> = Vec::new();
+        let mut from_array_fields: Vec<TokenStream2> = Vec::new();
+        for (f, offset) in self.fields.iter().zip(offsets.iter()) {
+            let fname = &f.name;
+            let (pre_stmts, read_expr) = field_from_array_parts(&f.ty, offset, fname);
+            from_array_preamble.extend(pre_stmts);
+            from_array_fields.push(quote! { #fname: #read_expr });
+        }
 
         // to_array: write each field into the u32 array.
         let to_array_stmts: Vec<TokenStream2> = self
@@ -244,6 +352,7 @@ impl StructInfo {
                 pub const SLAB_SIZE: usize = 0usize #(+ #slab_size_terms)*;
 
                 pub fn from_array(u32s: [u32; #name::SLAB_SIZE]) -> #name {
+                    #(#from_array_preamble)*
                     #name {
                         #(#from_array_fields,)*
                     }
@@ -366,13 +475,15 @@ impl EnumInfo {
         let name = &self.name;
 
         // Build match arms for from_array (u32 -> enum).
+        // Use block-form bodies with assignment because WGSL `switch` is a
+        // statement, not an expression.
         let from_arms: Vec<TokenStream2> = self
             .variants
             .iter()
             .map(|v| {
                 let vname = &v.name;
                 let disc = v.discriminant;
-                quote! { #disc => #name::#vname }
+                quote! { #disc => { result = #name::#vname; } }
             })
             .collect();
 
@@ -380,13 +491,15 @@ impl EnumInfo {
         let default_variant = &self.variants[0].name;
 
         // Build match arms for to_array (enum -> u32).
+        // Assign inside each arm body because WGSL `switch` is a statement,
+        // not an expression — it cannot appear in `let` bindings.
         let to_arms: Vec<TokenStream2> = self
             .variants
             .iter()
             .map(|v| {
                 let vname = &v.name;
                 let disc = v.discriminant;
-                quote! { #name::#vname => #disc }
+                quote! { #name::#vname => { v = #disc; } }
             })
             .collect();
 
@@ -395,16 +508,19 @@ impl EnumInfo {
                 pub const SLAB_SIZE: usize = 1usize;
 
                 pub fn from_array(u32s: [u32; 1usize]) -> #name {
+                    let mut result: #name;
                     match u32s[0usize] {
                         #(#from_arms,)*
-                        _ => #name::#default_variant,
+                        _ => { result = #name::#default_variant; },
                     }
+                    result
                 }
 
                 pub fn to_array(d: #name) -> [u32; 1usize] {
-                    let v: u32 = match d {
+                    let mut v: u32 = 0u32;
+                    match d {
                         #(#to_arms,)*
-                    };
+                    }
                     [v]
                 }
             }
@@ -575,23 +691,35 @@ fn field_slab_size_expr(ty: &syn::Type) -> TokenStream2 {
     }
 }
 
-/// Return a `TokenStream2` expression that reads this field from a `u32s`
-/// array at the given offset expression.
-fn field_from_array_expr(ty: &syn::Type, offset: &TokenStream2) -> TokenStream2 {
+/// Return pre-computation statements and a value expression to read a
+/// field from a `u32s` array at the given offset.
+///
+/// For primitive types the pre-statements are empty and the expression
+/// reads directly from `u32s`. For nested `#[slab_item]` types the
+/// pre-statements read a sub-array into a local variable so that the
+/// struct literal field can use a simple expression (WGSL does not
+/// support block expressions as struct field initializers).
+fn field_from_array_parts(
+    ty: &syn::Type,
+    offset: &TokenStream2,
+    field_name: &syn::Ident,
+) -> (Vec<TokenStream2>, TokenStream2) {
     match type_name_str(ty).as_deref() {
-        Some("u32") => quote! { u32s[#offset] },
-        Some("f32") => quote! { bitcast_f32(u32s[#offset]) },
-        Some("i32") => quote! { bitcast_i32(u32s[#offset]) },
-        Some("bool") => quote! { u32s[#offset] != 0u32 },
+        Some("u32") => (vec![], quote! { u32s[#offset] }),
+        Some("f32") => (vec![], quote! { bitcast_f32(u32s[#offset]) }),
+        Some("i32") => (vec![], quote! { bitcast_i32(u32s[#offset]) }),
+        Some("bool") => (vec![], quote! { u32s[#offset] != 0u32 }),
         _ => {
-            // Nested slab_item type: copy sub-array via slab_read_array!.
-            quote! {
-                {
-                    let mut sub = [0u32; #ty::SLAB_SIZE];
-                    slab_read_array!(u32s, #offset, sub, #ty::SLAB_SIZE);
-                    #ty::from_array(sub)
-                }
-            }
+            // Nested slab_item type: generate pre-statements to read the
+            // sub-array, then use the local variable in the struct literal.
+            let sub_ident = format_ident!("__sub_{}", field_name);
+            let val_ident = format_ident!("__val_{}", field_name);
+            let pre = vec![
+                quote! { let mut #sub_ident = [0u32; #ty::SLAB_SIZE]; },
+                quote! { slab_read_array!(u32s, #offset, #sub_ident, #ty::SLAB_SIZE); },
+                quote! { let #val_ident = #ty::from_array(#sub_ident); },
+            ];
+            (pre, quote! { #val_ident })
         }
     }
 }
@@ -664,14 +792,15 @@ fn strip_slab_item_attr(attrs: &mut Vec<syn::Attribute>) {
     attrs.retain(|a| !a.path().is_ident("slab_item"));
 }
 
-/// Check if an item is `use wgsl_rs::std::*;`.
-fn is_wgsl_std_import(item: &syn::Item) -> bool {
+/// Check if an item is `use <wgsl_crate>::std::*;`.
+fn is_wgsl_std_import(item: &syn::Item, wgsl_crate: &syn::Path) -> bool {
     let syn::Item::Use(use_item) = item else {
         return false;
     };
     let tokens = quote! { #use_item };
     let s = tokens.to_string();
-    s.contains("wgsl_rs :: std")
+    let crate_str = quote! { #wgsl_crate }.to_string();
+    s.contains(&format!("{crate_str} :: std"))
 }
 
 /// Extract a simple type name string from a `syn::Type`, if it's a plain

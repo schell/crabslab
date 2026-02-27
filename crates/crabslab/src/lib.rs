@@ -587,16 +587,14 @@ pub mod test {
     }
 
     // -----------------------------------------------------------------------
-    // #[wgsl] + #[slab_module] WGSL validation test
+    // #[slab_module(wgsl(...))] WGSL integration test
     // -----------------------------------------------------------------------
 
-    /// Test that `#[slab_module]` output is compatible with `#[wgsl]`
-    /// transpilation. The `#[wgsl]` attribute is applied first (outer),
-    /// then `#[slab_module]` runs on the module contents. wgsl-rs should
-    /// transpile the generated structs + inherent impls to WGSL while
-    /// passing through the `impl crabslab::SlabItem` trait impls.
-    #[wgsl_rs::wgsl(skip_validation)]
-    #[slab_module]
+    /// Test that `#[slab_module(wgsl(...))]` correctly generates companion
+    /// types and then emits `#[wgsl_rs::wgsl(...)]` on the output module.
+    /// wgsl-rs transpiles the generated structs + inherent impls to WGSL
+    /// while passing through the `impl crabslab::SlabItem` trait impls.
+    #[slab_module(wgsl(skip_validation))]
     mod wgsl_test_types {
         #[slab_item]
         #[derive(Clone, Copy, Debug, Default, PartialEq)]
