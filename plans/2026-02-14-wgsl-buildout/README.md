@@ -46,9 +46,13 @@ crates.
    position).
 5. **`#[slab_module]`** is a proc-macro that processes `#[slab_item]`
    annotations, generates ID types + `*_from_array`/`*_to_array` functions +
-   CPU trait impls. To get WGSL transpilation, stack `#[wgsl]` on top:
-   `#[wgsl] #[slab_module] mod my_types { ... }`. Rust expands the innermost
-   attribute first, so `#[slab_module]` runs before `#[wgsl]`.
+   CPU trait impls. To get WGSL transpilation, stack `#[wgsl]` on top.
+   **`#[slab_module]` must be the outer (first) attribute** so it runs before
+   `#[wgsl]`:
+   `#[slab_module] #[wgsl] mod my_types { ... }`.
+   Rust applies proc-macro attributes top-to-bottom (outermost first), so
+   `#[slab_module]` generates companion types before `#[wgsl]` transpiles
+   the module to WGSL.
 6. **wgpu integration** uses wgsl-rs's `linkage-wgpu` feature for
    auto-generated shader modules, bind group layouts, and pipeline helpers.
 7. **No backward compatibility.** The old crates are removed from the workspace
@@ -66,7 +70,7 @@ crates.
 | 2 | [Craballoc Update](phase-2-craballoc-update.md) | 1 week | Phase 1 | Complete |
 | 3 | [Wire Types & Compute Shader](phase-3-wire-types-and-shader.md) | 1 week | Phase 2 | Complete |
 | 4 | [Cleanup & Rename](phase-4-cleanup.md) | 2-3 days | Phase 3 | Complete |
-| 5 | [Testing](phase-5-testing.md) | 1 week | Phase 4 | Pending |
+| 5 | [Testing](phase-5-testing.md) | 1 week | Phase 4 | In progress |
 
 **Total estimate: ~4-5 weeks**
 
@@ -117,3 +121,14 @@ crates.
   instead of `obj.method(args)`.
 - **No generics in WGSL** -- LOW RISK. Each function is concrete; macros handle
   the generic storage access layer.
+- **Attribute ordering for `#[slab_module]` + `#[wgsl]`** -- RESOLVED. Rust
+  applies stacked proc-macro attributes top-to-bottom (outermost first), **not**
+  innermost first. `#[slab_module]` must be the outer attribute so it runs
+  first and generates companion types before `#[wgsl]` transpiles the module.
+  With the wrong order, companion types are missing from the WGSL output and
+  naga rejects the shader.
+- **`[0u32; N]` repeat expressions in `#[slab_module]` output** -- MEDIUM RISK.
+  wgsl-rs does not currently support `syn::Expr::Repeat`. The `#[slab_module]`
+  macro generates `[0u32; Type::SLAB_SIZE]` in `to_array` and nested
+  `from_array` functions. This blocks enabling naga validation (requires
+  wgsl-rs update).

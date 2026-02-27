@@ -256,6 +256,21 @@ pub struct MyData {
 }
 ```
 
+### Attribute Ordering for `#[slab_module]` + `#[wgsl]`
+
+**`#[slab_module]` must be the outer (top) attribute** when combined with
+`#[wgsl]`. Rust applies stacked proc-macro attributes top-to-bottom, so the
+outer attribute runs first:
+
+```rust
+#[crabslab::slab_module]       // runs FIRST — generates companion types
+#[wgsl_rs::wgsl]               // runs SECOND — transpiles to WGSL
+pub mod my_shader { ... }
+```
+
+If the order is reversed, `#[wgsl]` runs before companion types exist and the
+generated WGSL will be missing struct/function definitions.
+
 ### Core Types
 
 - `Value<T>` - Arena-allocated value with CPU cache and GPU sync
