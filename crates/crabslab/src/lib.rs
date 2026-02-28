@@ -594,7 +594,7 @@ pub mod test {
     /// types and then emits `#[wgsl_rs::wgsl(...)]` on the output module.
     /// wgsl-rs transpiles the generated structs + inherent impls to WGSL
     /// while passing through the `impl crabslab::SlabItem` trait impls.
-    #[slab_module(wgsl(skip_validation))]
+    #[slab_module(wgsl())]
     mod wgsl_test_types {
         #[slab_item]
         #[derive(Clone, Copy, Debug, Default, PartialEq)]

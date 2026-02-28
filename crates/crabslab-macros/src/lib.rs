@@ -520,6 +520,7 @@ impl EnumInfo {
                     let mut v: u32 = 0u32;
                     match d {
                         #(#to_arms,)*
+                        _ => {},
                     }
                     [v]
                 }
@@ -712,8 +713,8 @@ fn field_from_array_parts(
         _ => {
             // Nested slab_item type: generate pre-statements to read the
             // sub-array, then use the local variable in the struct literal.
-            let sub_ident = format_ident!("__sub_{}", field_name);
-            let val_ident = format_ident!("__val_{}", field_name);
+            let sub_ident = format_ident!("sub_{}", field_name);
+            let val_ident = format_ident!("val_{}", field_name);
             let pre = vec![
                 quote! { let mut #sub_ident = [0u32; #ty::SLAB_SIZE]; },
                 quote! { slab_read_array!(u32s, #offset, #sub_ident, #ty::SLAB_SIZE); },

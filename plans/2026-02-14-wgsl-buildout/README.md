@@ -46,13 +46,12 @@ crates.
    position).
 5. **`#[slab_module]`** is a proc-macro that processes `#[slab_item]`
    annotations, generates ID types + `*_from_array`/`*_to_array` functions +
-   CPU trait impls. To get WGSL transpilation, stack `#[wgsl]` on top.
-   **`#[slab_module]` must be the outer (first) attribute** so it runs before
-   `#[wgsl]`:
-   `#[slab_module] #[wgsl] mod my_types { ... }`.
-   Rust applies proc-macro attributes top-to-bottom (outermost first), so
-   `#[slab_module]` generates companion types before `#[wgsl]` transpiles
-   the module to WGSL.
+   CPU trait impls. To get WGSL transpilation, pass a `wgsl(...)` parameter
+   group: `#[slab_module(wgsl())] mod my_types { ... }`. The `wgsl(...)` group
+   is forwarded as `#[wgsl_rs::wgsl(...)]` on the output module, ensuring
+   companion types are generated before transpilation. Bare `#[slab_module]`
+   (no `wgsl(...)`) skips WGSL transpilation entirely. A `wgsl_crate` param
+   overrides the default `wgsl_rs` crate path.
 6. **wgpu integration** uses wgsl-rs's `linkage-wgpu` feature for
    auto-generated shader modules, bind group layouts, and pipeline helpers.
 7. **No backward compatibility.** The old crates are removed from the workspace
@@ -70,7 +69,7 @@ crates.
 | 2 | [Craballoc Update](phase-2-craballoc-update.md) | 1 week | Phase 1 | Complete |
 | 3 | [Wire Types & Compute Shader](phase-3-wire-types-and-shader.md) | 1 week | Phase 2 | Complete |
 | 4 | [Cleanup & Rename](phase-4-cleanup.md) | 2-3 days | Phase 3 | Complete |
-| 5 | [Testing](phase-5-testing.md) | 1 week | Phase 4 | In progress |
+| 5 | [Testing](phase-5-testing.md) | 1 week | Phase 4 | Complete |
 
 **Total estimate: ~4-5 weeks**
 
@@ -107,28 +106,31 @@ crates.
 
 ### Remaining Risks
 
-- **Atomic counter pattern** -- LOW RISK. Full atomic support in wgsl-rs.
+All major risks have been resolved. The following are documented for
+reference:
+
+- **Atomic counter pattern** -- RESOLVED. Full atomic support in wgsl-rs.
   Requires a separate storage binding (cannot use `Atomic<u32>` at arbitrary
-  index within `RuntimeArray<u32>`).
-- **`match` as expression vs statement** -- HIGH RISK (confirmed). Must use
-  statement form with explicit variable assignment. Same applies to `if` as
-  expression.
-- **Struct update syntax** -- CONFIRMED. WGSL has no `..data` syntax; all
-  fields must be listed explicitly.
-- **Nested `from_array` verbosity** -- LOW RISK. Verbose but correct; generated
+  index within `RuntimeArray<u32>`). GPU tests confirm correct behavior.
+- **`match` as expression vs statement** -- RESOLVED. Must use statement form
+  with explicit variable assignment. `#[slab_module]` codegen handles this
+  automatically for enums (block arms with `var` assignment).
+- **Struct update syntax** -- RESOLVED. WGSL has no `..data` syntax; all
+  fields must be listed explicitly. `#[slab_module]` codegen handles this.
+- **Nested `from_array` verbosity** -- RESOLVED. Verbose but correct; generated
   code, not hand-written.
 - **Method receiver syntax** -- LOW RISK. Must use `Type::method(obj, args)`
   instead of `obj.method(args)`.
-- **No generics in WGSL** -- LOW RISK. Each function is concrete; macros handle
-  the generic storage access layer.
-- **Attribute ordering for `#[slab_module]` + `#[wgsl]`** -- RESOLVED. Rust
-  applies stacked proc-macro attributes top-to-bottom (outermost first), **not**
-  innermost first. `#[slab_module]` must be the outer attribute so it runs
-  first and generates companion types before `#[wgsl]` transpiles the module.
-  With the wrong order, companion types are missing from the WGSL output and
-  naga rejects the shader.
-- **`[0u32; N]` repeat expressions in `#[slab_module]` output** -- MEDIUM RISK.
-  wgsl-rs does not currently support `syn::Expr::Repeat`. The `#[slab_module]`
-  macro generates `[0u32; Type::SLAB_SIZE]` in `to_array` and nested
-  `from_array` functions. This blocks enabling naga validation (requires
-  wgsl-rs update).
+- **No generics in WGSL** -- RESOLVED. Each function is concrete; macros
+  handle the generic storage access layer.
+- **Attribute ordering for `#[slab_module]` + `#[wgsl]`** -- RESOLVED.
+  `#[slab_module(wgsl(...))]` now handles this internally: `#[slab_module]`
+  generates companion types first, then emits `#[wgsl_rs::wgsl(...)]` on
+  the output module. No stacking required.
+- **`[0u32; N]` repeat expressions in `#[slab_module]` output** -- RESOLVED.
+  wgsl-rs commit `3e608ec` added `syn::Expr::Repeat` support. Naga
+  validates all generated WGSL at compile time (no `skip_validation`).
+- **wgsl-rs `linkage-wgpu` + `ShaderStages::all()`** -- RESOLVED. wgsl-rs
+  sets `ShaderStages::all()` on bind group layout entries, which requires
+  `VERTEX_WRITABLE_STORAGE` device feature for read_write storage bindings.
+  Test device setup requests this feature.

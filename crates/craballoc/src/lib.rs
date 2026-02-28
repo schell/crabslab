@@ -61,8 +61,13 @@ fn wgpu_runtime() -> crate::runtime::WgpuRuntime {
         }))
         .unwrap();
     let (device, queue) =
-        futures_lite::future::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .unwrap();
+        futures_lite::future::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            // wgsl-rs linkage sets ShaderStages::all() on bind group layout
+            // entries, so read_write storage bindings require this feature.
+            required_features: wgpu::Features::VERTEX_WRITABLE_STORAGE,
+            ..Default::default()
+        }))
+        .unwrap();
     crate::runtime::WgpuRuntime {
         device: device.into(),
         queue: queue.into(),

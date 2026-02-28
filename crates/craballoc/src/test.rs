@@ -17,7 +17,7 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::needless_late_init)]
-#[crabslab::slab_module(wgsl(skip_validation))]
+#[crabslab::slab_module(wgsl())]
 pub mod apply_data_changes {
     use wgsl_rs::std::*;
 
@@ -53,7 +53,7 @@ pub mod apply_data_changes {
 
     impl DataChange {
         pub fn apply(change: DataChange, data: Data) -> Data {
-            let result: Data;
+            let mut result: Data;
             #[wgsl_allow(non_literal_match_statement_patterns)]
             match change.ty {
                 DataChangeTy::I => {
@@ -1169,11 +1169,254 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// GPU (wgpu) tests — disabled until linkage-wgpu TestBackendWgpu is ready.
-// TODO: Phase 3 follow-up — re-enable with linkage-wgpu pipeline.
+// WGSL inspection
 // ---------------------------------------------------------------------------
-//
-// The wgpu-backend tests (gpu_update_test_sanity_on_gpu,
-// gpu_array_update_test_sanity_on_gpu, proptest_gpu_updates_checked_on_gpu)
-// require TestBackendWgpu which needs the linkage-wgpu generated pipeline.
-// For now, only the CPU-dispatch tests are enabled.
+
+#[test]
+fn wgsl_source_contains_companion_types() {
+    let source = apply_data_changes::WGSL_MODULE.wgsl_source();
+    let wgsl = source.join("\n");
+
+    // Verify companion types are present in the WGSL output.
+    assert!(
+        wgsl.contains("struct DataId"),
+        "WGSL should contain 'struct DataId'"
+    );
+    assert!(
+        wgsl.contains("struct DataArray"),
+        "WGSL should contain 'struct DataArray'"
+    );
+    assert!(
+        wgsl.contains("struct DataChangeTyId"),
+        "WGSL should contain 'struct DataChangeTyId'"
+    );
+    assert!(
+        wgsl.contains("struct DataChange"),
+        "WGSL should contain 'struct DataChange'"
+    );
+    assert!(
+        wgsl.contains("@compute"),
+        "WGSL should contain a compute entry point"
+    );
+}
+
+#[test]
+fn wgsl_source_validates_with_naga() {
+    apply_data_changes::WGSL_MODULE
+        .validate()
+        .expect("WGSL should validate with naga");
+}
+
+// ---------------------------------------------------------------------------
+// GPU (wgpu) backend — TestBackendWgpu + BackendUpdate impl
+// ---------------------------------------------------------------------------
+
+struct TestBackendWgpu {
+    bind_group_layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::ComputePipeline,
+    invocations_ran_buffer: wgpu::Buffer,
+    invocations_skipped_buffer: wgpu::Buffer,
+}
+
+impl TestBackendWgpu {
+    fn new(runtime: &crate::runtime::WgpuRuntime) -> Self {
+        use apply_data_changes::linkage;
+
+        let device = &runtime.device;
+        let module = linkage::shader_module(device);
+        let bind_group_layout = linkage::bind_group_0::layout(device);
+        let pipeline_layout = linkage::main::pipeline_layout(device, &[&bind_group_layout]);
+        let pipeline = linkage::main::compute_pipeline(device, Some(&pipeline_layout), &module);
+
+        let counter_desc = |label| wgpu::BufferDescriptor {
+            label: Some(label),
+            size: 4,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        };
+        let invocations_ran_buffer = device.create_buffer(&counter_desc("invocations_ran"));
+        let invocations_skipped_buffer = device.create_buffer(&counter_desc("invocations_skipped"));
+
+        Self {
+            bind_group_layout,
+            pipeline,
+            invocations_ran_buffer,
+            invocations_skipped_buffer,
+        }
+    }
+}
+
+impl BackendUpdate for GpuUpdateTest<crate::runtime::WgpuRuntime, TestBackendWgpu> {
+    fn apply_backend_changes(&mut self) -> (u32, u32) {
+        use apply_data_changes::linkage;
+
+        let runtime = self.arena.runtime();
+        let device = &runtime.device;
+        let queue = &runtime.queue;
+
+        // Zero the counter buffers.
+        queue.write_buffer(&self.backend_updater.invocations_ran_buffer, 0, &[0; 4]);
+        queue.write_buffer(&self.backend_updater.invocations_skipped_buffer, 0, &[0; 4]);
+
+        // Get the arena buffers (commit has already been called).
+        let data_buffer = self.arena.get_buffer().expect("data arena has no buffer");
+        let changes_buffer = self
+            .changes_arena
+            .get_buffer()
+            .expect("changes arena has no buffer");
+
+        // Create bind group.
+        let bind_group = linkage::bind_group_0::create(
+            device,
+            &self.backend_updater.bind_group_layout,
+            data_buffer.as_entire_binding(),
+            changes_buffer.as_entire_binding(),
+            self.backend_updater
+                .invocations_ran_buffer
+                .as_entire_binding(),
+            self.backend_updater
+                .invocations_skipped_buffer
+                .as_entire_binding(),
+        );
+
+        // Dispatch compute shader.
+        let invocation = self.invocation.get();
+        let (wg_x, wg_y, wg_z) = invocation.workgroup_dimensions();
+        log::debug!("  GPU dispatch workgroup dimensions: ({wg_x}, {wg_y}, {wg_z})");
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("apply_data_changes"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.backend_updater.pipeline);
+            pass.set_bind_group(0, Some(&bind_group), &[]);
+            pass.dispatch_workgroups(wg_x, wg_y, wg_z);
+        }
+
+        // Create staging buffers to read back counter values.
+        let staging_desc = |label| wgpu::BufferDescriptor {
+            label: Some(label),
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        };
+        let ran_staging = device.create_buffer(&staging_desc("ran_staging"));
+        let skipped_staging = device.create_buffer(&staging_desc("skipped_staging"));
+
+        encoder.copy_buffer_to_buffer(
+            &self.backend_updater.invocations_ran_buffer,
+            0,
+            &ran_staging,
+            0,
+            4,
+        );
+        encoder.copy_buffer_to_buffer(
+            &self.backend_updater.invocations_skipped_buffer,
+            0,
+            &skipped_staging,
+            0,
+            4,
+        );
+
+        let submission_index = queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and read back the counters.
+        let read_u32 = |buffer: &wgpu::Buffer| -> u32 {
+            let slice = buffer.slice(..);
+            let (tx, rx) = async_channel::bounded(1);
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send_blocking(result);
+            });
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission_index.clone()),
+                    timeout: None,
+                })
+                .expect("device poll");
+            futures_lite::future::block_on(rx.recv())
+                .expect("channel recv")
+                .expect("map_async");
+            let data = slice.get_mapped_range();
+            let value = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            drop(data);
+            buffer.unmap();
+            value
+        };
+
+        let ran = read_u32(&ran_staging);
+        let skipped = read_u32(&skipped_staging);
+
+        (ran, skipped)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GPU (wgpu) tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gpu_update_test_sanity_on_gpu() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let runtime = crate::wgpu_runtime();
+    let backend = TestBackendWgpu::new(&runtime);
+    let arena = Arena::new(&runtime, "test-gpu", None);
+    let all_values = vec![ValueData::Single(
+        Data {
+            i: 0,
+            float_val: 0.0,
+            ints_0: 0,
+            ints_1: 0,
+        },
+        vec![
+            DataChange::i(1),
+            DataChange::float(1.0),
+            DataChange::ints(1, 1),
+        ],
+    )];
+    let test = GpuUpdateTest::new(arena, backend, &all_values);
+    test.run(true);
+}
+
+#[test]
+fn gpu_array_update_test_sanity_on_gpu() {
+    let _ = env_logger::builder().is_test(true).try_init();
+    let runtime = crate::wgpu_runtime();
+    let backend = TestBackendWgpu::new(&runtime);
+    let arena = Arena::new(&runtime, "test-gpu", None);
+    let all_values = vec![ValueData::Array(
+        vec![Data {
+            i: 1683186,
+            float_val: 2.1727349e24,
+            ints_0: 348221601,
+            ints_1: 1304208859,
+        }],
+        vec![ArrayChange {
+            i: 0,
+            change: DataChange {
+                ty: DataChangeTy::Ints,
+                data_0: 3211909787,
+                data_1: 1326905872,
+                data_2: 0,
+            },
+        }],
+    )];
+    let test = GpuUpdateTest::new(arena, backend, &all_values);
+    test.run(true);
+}
+
+proptest! {
+    #[test]
+    fn proptest_gpu_updates_checked_on_gpu(value_data in proptest::collection::vec(arb_value_data(8, 8), 1..8)) {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let runtime = crate::wgpu_runtime();
+        let backend = TestBackendWgpu::new(&runtime);
+        let arena = Arena::new(&runtime, "test-gpu", None);
+        let test = GpuUpdateTest::new(arena, backend, &value_data);
+        test.run(true);
+    }
+}
