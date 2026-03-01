@@ -117,11 +117,7 @@ pub mod apply_data_changes {
     #[compute]
     #[workgroup_size(16, 1, 1)]
     pub fn main(#[builtin(global_invocation_id)] global_id: Vec3u) {
-        // Read invocation descriptor from changes slab at offset 0.
-        // ApplyDataChangeInvocation::SLAB_SIZE == 2
-        let mut inv_arr = [0u32, 0u32];
-        slab_read_array!(get!(CHANGES_SLAB), 0u32, inv_arr, 2);
-        let invocation = ApplyDataChangeInvocation::from_array(inv_arr);
+        let invocation = slab_read!(ApplyDataChangeInvocation, get!(CHANGES_SLAB), 0u32);
 
         let index = global_id.x;
         if index >= invocation.changes_ids.len {
@@ -130,30 +126,16 @@ pub mod apply_data_changes {
         }
         atomic_add(&get!(INVOCATIONS_RAN), 1u32);
 
-        // Read AnyChangeId from changes slab.
-        // AnyChangeId::SLAB_SIZE == 3
         let change_id_id = AnyChangeIdArray::at(invocation.changes_ids, index);
-        let mut any_id_arr = [0u32, 0u32, 0u32];
-        slab_read_array!(get!(CHANGES_SLAB), change_id_id.inner, any_id_arr, 3);
-        let any_change = AnyChangeId::from_array(any_id_arr);
+        let any_change = slab_read!(AnyChangeId, get!(CHANGES_SLAB), change_id_id.inner);
 
-        // Read ArrayChange from changes slab.
-        // ArrayChange::SLAB_SIZE == 5
-        let mut ac_arr = [0u32, 0u32, 0u32, 0u32, 0u32];
-        slab_read_array!(get!(CHANGES_SLAB), any_change.change_id.inner, ac_arr, 5);
-        let array_change = ArrayChange::from_array(ac_arr);
+        let array_change = slab_read!(ArrayChange, get!(CHANGES_SLAB), any_change.change_id.inner);
 
-        // Read Data from data slab.
-        // Data::SLAB_SIZE == 4
         let data_id = DataArray::at(any_change.data_array, array_change.i);
-        let mut data_arr = [0u32, 0u32, 0u32, 0u32];
-        slab_read_array!(get!(DATA_SLAB), data_id.inner, data_arr, 4);
-        let data = Data::from_array(data_arr);
+        let data = slab_read!(Data, get!(DATA_SLAB), data_id.inner);
 
-        // Apply change and write back.
         let result = DataChange::apply(array_change.change, data);
-        let out_arr = Data::to_array(result);
-        slab_write_array!(get_mut!(DATA_SLAB), data_id.inner, out_arr, 4);
+        slab_write!(Data, get_mut!(DATA_SLAB), data_id.inner, result);
     }
 }
 

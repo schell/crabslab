@@ -12,8 +12,8 @@ phase documents, which are the source of truth for all migration decisions.
 
 ### Workspace Structure
 
-- `crates/crabslab` - Core `SlabItem` trait, `slab_read`/`slab_write` helpers, re-exports `#[slab_module]`/`#[slab_item]` macros
-- `crates/crabslab-macros` - Proc-macros: `#[slab_module]` and `#[slab_item]`
+- `crates/crabslab` - Core `SlabItem` trait, `slab_read`/`slab_write` helpers, `slab_read!`/`slab_write!` macros, re-exports `#[slab_module]`/`#[slab_item]`
+- `crates/crabslab-macros` - Proc-macros: `#[slab_module]` and `#[slab_item]`, `slab_read!`/`slab_write!` expansion
 - `crates/craballoc` - Arena allocator with RAII semantics and wgpu support
 
 ## Build, Test, and Lint Commands
@@ -263,7 +263,7 @@ pass a `wgsl(...)` parameter group to `#[slab_module]`:
 
 ```rust
 // Correct — slab_module generates companion types, then emits #[wgsl] on the output
-#[crabslab::slab_module(wgsl(skip_validation))]
+#[crabslab::slab_module(wgsl())]
 pub mod my_shader { ... }
 
 // Also correct — bare #[slab_module] (no WGSL transpilation)
@@ -271,13 +271,31 @@ pub mod my_shader { ... }
 pub mod my_types { ... }
 
 // Custom wgsl crate path
-#[crabslab::slab_module(wgsl_crate = my_wgsl, wgsl(skip_validation))]
+#[crabslab::slab_module(wgsl_crate = my_wgsl, wgsl())]
 pub mod my_shader { ... }
 ```
 
 The `wgsl(...)` group is forwarded as `#[wgsl_rs::wgsl(...)]` on the output
 module. This ensures `#[wgsl]` always runs *after* companion types have been
 generated, eliminating macro ordering issues.
+
+### `slab_read!` / `slab_write!` Macros
+
+Inside a `#[slab_module]`, use `slab_read!` and `slab_write!` to read/write
+`#[slab_item]` types from/to storage buffers. These are expanded by
+`#[slab_module]` into `slab_read_array!` + `from_array` / `to_array` +
+`slab_write_array!` before `#[wgsl]` runs, so they work on both CPU and GPU.
+
+```rust
+// Read a typed value from a storage slab at an offset
+let data = slab_read!(Data, get!(DATA_SLAB), offset);
+
+// Write a typed value to a storage slab at an offset
+slab_write!(Data, get_mut!(DATA_SLAB), offset, data);
+```
+
+Outside a `#[slab_module]`, the `macro_rules!` fallback in the `crabslab`
+crate provides CPU-only behavior using the `SlabItem` trait.
 
 ### Core Types
 

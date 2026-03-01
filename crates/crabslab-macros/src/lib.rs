@@ -209,6 +209,9 @@ fn process_module(
     // Append generated items to the module body.
     processed_items.extend(new_items);
 
+    // Expand slab_read! / slab_write! macro calls in all items.
+    expand_slab_macros(&mut processed_items);
+
     // Rebuild the module with processed items.
     module.content = Some((brace, processed_items));
 
@@ -819,5 +822,255 @@ fn type_name_str(ty: &syn::Type) -> Option<String> {
         Some(seg.ident.to_string())
     } else {
         None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// slab_read! / slab_write! expansion
+// ---------------------------------------------------------------------------
+
+/// Visitor that expands `slab_read!(Type, slab, offset)` and
+/// `slab_write!(Type, slab, offset, value)` macro calls into their
+/// multi-statement equivalents.
+///
+/// The expansion happens in-place via `syn::visit_mut`, before the module
+/// is emitted with `#[wgsl]`. This means `#[wgsl]` only sees
+/// `slab_read_array!`/`slab_write_array!` calls which it already supports.
+///
+/// Because WGSL does not support block expressions, the expansion works at
+/// the **statement list** level rather than the expression level.
+///
+/// For `let x = slab_read!(Type, slab, offset);` the single statement is
+/// replaced by three statements:
+///
+/// ```ignore
+/// let mut slab_read_arr = [0u32; Type::SLAB_SIZE];
+/// slab_read_array!(slab, offset, slab_read_arr, Type::SLAB_SIZE);
+/// let x = Type::from_array(slab_read_arr);
+/// ```
+///
+/// For `slab_write!(Type, slab, offset, value);` the single statement is
+/// replaced by two statements:
+///
+/// ```ignore
+/// let slab_write_arr = Type::to_array(value);
+/// slab_write_array!(slab, offset, slab_write_arr, Type::SLAB_SIZE);
+/// ```
+struct SlabMacroExpander {
+    /// Counter to generate unique variable names across multiple expansions
+    /// in the same block.
+    counter: usize,
+}
+
+impl SlabMacroExpander {
+    fn new() -> Self {
+        Self { counter: 0 }
+    }
+
+    /// Generate a unique identifier for temporary variables.
+    fn unique_ident(&mut self, prefix: &str) -> syn::Ident {
+        let id = format_ident!("{}_{}", prefix, self.counter);
+        self.counter += 1;
+        id
+    }
+
+    /// Check if a macro path is `slab_read` (possibly qualified).
+    fn is_slab_read(mac: &syn::Macro) -> bool {
+        mac.path.is_ident("slab_read")
+    }
+
+    /// Check if a macro path is `slab_write` (possibly qualified).
+    fn is_slab_write(mac: &syn::Macro) -> bool {
+        mac.path.is_ident("slab_write")
+    }
+}
+
+/// Parsed arguments for `slab_read!(Type, slab, offset)`.
+struct SlabReadArgs {
+    ty: syn::Type,
+    slab: syn::Expr,
+    offset: syn::Expr,
+}
+
+impl syn::parse::Parse for SlabReadArgs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let ty: syn::Type = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let slab: syn::Expr = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let offset: syn::Expr = input.parse()?;
+        // Allow optional trailing comma.
+        let _ = input.parse::<syn::Token![,]>();
+        Ok(SlabReadArgs { ty, slab, offset })
+    }
+}
+
+/// Parsed arguments for `slab_write!(Type, slab, offset, value)`.
+struct SlabWriteArgs {
+    ty: syn::Type,
+    slab: syn::Expr,
+    offset: syn::Expr,
+    value: syn::Expr,
+}
+
+impl syn::parse::Parse for SlabWriteArgs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let ty: syn::Type = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let slab: syn::Expr = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let offset: syn::Expr = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let value: syn::Expr = input.parse()?;
+        // Allow optional trailing comma.
+        let _ = input.parse::<syn::Token![,]>();
+        Ok(SlabWriteArgs {
+            ty,
+            slab,
+            offset,
+            value,
+        })
+    }
+}
+
+impl syn::visit_mut::VisitMut for SlabMacroExpander {
+    fn visit_block_mut(&mut self, block: &mut syn::Block) {
+        // First recurse into nested blocks/expressions.
+        syn::visit_mut::visit_block_mut(self, block);
+
+        // Then scan the statement list for slab_read!/slab_write! and
+        // expand each into multiple statements.
+        let mut new_stmts: Vec<syn::Stmt> = Vec::with_capacity(block.stmts.len());
+        for stmt in block.stmts.drain(..) {
+            match &stmt {
+                // Case 1: `let <pat> = slab_read!(Type, slab, offset);`
+                syn::Stmt::Local(local) if Self::is_let_slab_read(local) => {
+                    if let Some(expanded) = self.expand_let_slab_read(local) {
+                        new_stmts.extend(expanded);
+                    } else {
+                        new_stmts.push(stmt);
+                    }
+                }
+                // Case 2: `slab_write!(Type, slab, offset, value);`
+                syn::Stmt::Macro(stmt_macro) if Self::is_slab_write(&stmt_macro.mac) => {
+                    if let Some(expanded) = self.expand_stmt_slab_write(stmt_macro) {
+                        new_stmts.extend(expanded);
+                    } else {
+                        new_stmts.push(stmt);
+                    }
+                }
+                // Case 3: `slab_read!(Type, slab, offset);` in statement
+                // position (result discarded — unusual but allowed).
+                syn::Stmt::Macro(stmt_macro) if Self::is_slab_read(&stmt_macro.mac) => {
+                    if let Some(expanded) = self.expand_stmt_slab_read(stmt_macro) {
+                        new_stmts.extend(expanded);
+                    } else {
+                        new_stmts.push(stmt);
+                    }
+                }
+                _ => new_stmts.push(stmt),
+            }
+        }
+        block.stmts = new_stmts;
+    }
+}
+
+impl SlabMacroExpander {
+    /// Check if a `let` statement's initializer is a `slab_read!()` call.
+    fn is_let_slab_read(local: &syn::Local) -> bool {
+        let Some(init) = &local.init else {
+            return false;
+        };
+        matches!(&*init.expr, syn::Expr::Macro(em) if Self::is_slab_read(&em.mac))
+    }
+
+    /// Expand `let <pat> = slab_read!(Type, slab, offset);` into:
+    ///
+    /// ```ignore
+    /// let mut slab_read_arr_N = [0u32; Type::SLAB_SIZE];
+    /// slab_read_array!(slab, offset, slab_read_arr_N, Type::SLAB_SIZE);
+    /// let <pat> = Type::from_array(slab_read_arr_N);
+    /// ```
+    fn expand_let_slab_read(&mut self, local: &syn::Local) -> Option<Vec<syn::Stmt>> {
+        let init = local.init.as_ref()?;
+        let syn::Expr::Macro(em) = &*init.expr else {
+            return None;
+        };
+        let args: SlabReadArgs = syn::parse2(em.mac.tokens.clone()).ok()?;
+        let ty = &args.ty;
+        let slab = &args.slab;
+        let offset = &args.offset;
+        let arr_ident = self.unique_ident("slab_read_arr");
+        let pat = &local.pat;
+
+        let stmts: Vec<syn::Stmt> = vec![
+            syn::parse_quote! {
+                let mut #arr_ident = [0u32; #ty::SLAB_SIZE];
+            },
+            syn::parse_quote! {
+                slab_read_array!(#slab, #offset, #arr_ident, #ty::SLAB_SIZE);
+            },
+            syn::parse_quote! {
+                let #pat = #ty::from_array(#arr_ident);
+            },
+        ];
+        Some(stmts)
+    }
+
+    /// Expand `slab_write!(Type, slab, offset, value);` into:
+    ///
+    /// ```ignore
+    /// let slab_write_arr_N = Type::to_array(value);
+    /// slab_write_array!(slab, offset, slab_write_arr_N, Type::SLAB_SIZE);
+    /// ```
+    fn expand_stmt_slab_write(&mut self, stmt_macro: &syn::StmtMacro) -> Option<Vec<syn::Stmt>> {
+        let args: SlabWriteArgs = syn::parse2(stmt_macro.mac.tokens.clone()).ok()?;
+        let ty = &args.ty;
+        let slab = &args.slab;
+        let offset = &args.offset;
+        let value = &args.value;
+        let arr_ident = self.unique_ident("slab_write_arr");
+
+        let stmts: Vec<syn::Stmt> = vec![
+            syn::parse_quote! {
+                let #arr_ident = #ty::to_array(#value);
+            },
+            syn::parse_quote! {
+                slab_write_array!(#slab, #offset, #arr_ident, #ty::SLAB_SIZE);
+            },
+        ];
+        Some(stmts)
+    }
+
+    /// Expand `slab_read!(Type, slab, offset);` in statement position
+    /// (result discarded).
+    fn expand_stmt_slab_read(&mut self, stmt_macro: &syn::StmtMacro) -> Option<Vec<syn::Stmt>> {
+        let args: SlabReadArgs = syn::parse2(stmt_macro.mac.tokens.clone()).ok()?;
+        let ty = &args.ty;
+        let slab = &args.slab;
+        let offset = &args.offset;
+        let arr_ident = self.unique_ident("slab_read_arr");
+
+        let stmts: Vec<syn::Stmt> = vec![
+            syn::parse_quote! {
+                let mut #arr_ident = [0u32; #ty::SLAB_SIZE];
+            },
+            syn::parse_quote! {
+                slab_read_array!(#slab, #offset, #arr_ident, #ty::SLAB_SIZE);
+            },
+            syn::parse_quote! {
+                let _ = #ty::from_array(#arr_ident);
+            },
+        ];
+        Some(stmts)
+    }
+}
+
+/// Expand all `slab_read!` / `slab_write!` macro calls in a list of items.
+fn expand_slab_macros(items: &mut [syn::Item]) {
+    use syn::visit_mut::VisitMut;
+    let mut expander = SlabMacroExpander::new();
+    for item in items.iter_mut() {
+        expander.visit_item_mut(item);
     }
 }

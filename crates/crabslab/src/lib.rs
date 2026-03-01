@@ -74,6 +74,55 @@ pub fn slab_write<T: SlabItem>(slab: &mut [u32], index: usize, val: &T) {
 }
 
 // ---------------------------------------------------------------------------
+// slab_read! / slab_write! macros
+// ---------------------------------------------------------------------------
+
+/// Read a [`SlabItem`] from a storage slab at the given offset.
+///
+/// Inside a `#[slab_module]` this macro is expanded by the proc-macro into
+/// `slab_read_array!` + `Type::from_array(...)` before `#[wgsl]` runs, so it
+/// works on both CPU and GPU. Outside a `#[slab_module]` the `macro_rules!`
+/// fallback delegates to [`slab_read`].
+///
+/// # Syntax
+///
+/// ```ignore
+/// let value = slab_read!(Type, slab_expr, offset_expr);
+/// ```
+#[macro_export]
+macro_rules! slab_read {
+    ($ty:ty, $slab:expr, $offset:expr) => {{
+        let mut arr = <$ty as $crate::SlabItem>::Array::default();
+        let offset = $offset as usize;
+        let slice: &[u32] = &$slab[offset..offset + <$ty as $crate::SlabItem>::SLAB_SIZE];
+        arr.as_mut().copy_from_slice(slice);
+        <$ty>::from_array(arr)
+    }};
+}
+
+/// Write a [`SlabItem`] to a storage slab at the given offset.
+///
+/// Inside a `#[slab_module]` this macro is expanded by the proc-macro into
+/// `Type::to_array(...)` + `slab_write_array!` before `#[wgsl]` runs, so it
+/// works on both CPU and GPU. Outside a `#[slab_module]` the `macro_rules!`
+/// fallback delegates to [`slab_write`].
+///
+/// # Syntax
+///
+/// ```ignore
+/// slab_write!(Type, slab_expr, offset_expr, value_expr);
+/// ```
+#[macro_export]
+macro_rules! slab_write {
+    ($ty:ty, $slab:expr, $offset:expr, $val:expr) => {{
+        let arr = <$ty>::to_array($val);
+        let offset = $offset as usize;
+        let size = <$ty as $crate::SlabItem>::SLAB_SIZE;
+        $slab[offset..offset + size].copy_from_slice(arr.as_ref());
+    }};
+}
+
+// ---------------------------------------------------------------------------
 // Primitive SlabItem implementations
 // ---------------------------------------------------------------------------
 
@@ -634,6 +683,28 @@ pub mod test {
         let mut slab = [0u32; 4];
         slab_write(&mut slab, 0, &d);
         let d3: wgsl_test_types::SimpleData = slab_read(&slab, 0);
+        assert_eq!(d, d3);
+    }
+
+    #[test]
+    fn slab_read_write_macros_cpu_fallback() {
+        use test_types::*;
+
+        // slab_read!/slab_write! macro_rules fallback (outside #[slab_module]).
+        let d = Data {
+            i: 7,
+            float_val: 2.5,
+            ints_0: 10,
+            ints_1: 20,
+        };
+        let mut slab = [0u32; 8];
+        slab_write!(Data, slab, 0, d);
+        let d2 = slab_read!(Data, slab, 0);
+        assert_eq!(d, d2);
+
+        // At non-zero offset.
+        slab_write!(Data, slab, 4, d);
+        let d3 = slab_read!(Data, slab, 4);
         assert_eq!(d, d3);
     }
 }
