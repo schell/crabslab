@@ -10,8 +10,9 @@ categories = ["rendering", "game-development", "graphics"]
 readme = "README.md"
 
 [features]
-default = ["wgpu"]
+default = ["wgpu", "wgsl-rs"]
 wgpu = ["dep:wgpu"]
+wgsl-rs = ["crabslab/wgsl-rs"]
 
 [dependencies]
 async-channel.workspace = true

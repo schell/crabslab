@@ -19,6 +19,9 @@ pub extern crate self as crabslab;
 
 pub use crabslab_macros::{slab_item, slab_module};
 
+#[cfg(feature = "wgsl-rs")]
+mod wgsl_rs_types;
+
 /// CPU-side trait for types that can be stored in a `u32` slab.
 ///
 /// Auto-implemented by the `#[slab_module]` macro for `#[slab_item]` types.
@@ -706,5 +709,238 @@ pub mod test {
         slab_write!(Data, slab, 4, d);
         let d3 = slab_read!(Data, slab, 4);
         assert_eq!(d, d3);
+    }
+
+    // -----------------------------------------------------------------------
+    // #[slab_module] integration tests for wgsl-rs vector/matrix fields
+    // -----------------------------------------------------------------------
+
+    #[slab_module]
+    mod test_vec_fields {
+        #[slab_item]
+        #[derive(Clone, Copy, Debug, Default, PartialEq)]
+        pub struct VecData {
+            pub pos: Vec3f,
+            pub uv: Vec2f,
+            pub color: Vec4f,
+        }
+
+        #[slab_item]
+        #[derive(Clone, Copy, Debug, Default, PartialEq)]
+        pub struct IntVecData {
+            pub a: Vec2i,
+            pub b: Vec3u,
+            pub c: Vec4b,
+        }
+    }
+
+    #[test]
+    fn vec_field_slab_sizes() {
+        // VecData: Vec3f(3) + Vec2f(2) + Vec4f(4) = 9.
+        assert_eq!(9, test_vec_fields::VecData::SLAB_SIZE);
+        assert_eq!(9, <test_vec_fields::VecData as SlabItem>::SLAB_SIZE);
+
+        // IntVecData: Vec2i(2) + Vec3u(3) + Vec4b(4) = 9.
+        assert_eq!(9, test_vec_fields::IntVecData::SLAB_SIZE);
+    }
+
+    #[test]
+    fn vec_field_round_trip() {
+        use wgsl_rs::std::*;
+
+        let d = test_vec_fields::VecData {
+            pos: vec3f(1.0, 2.0, 3.0),
+            uv: vec2f(0.5, 0.75),
+            color: vec4f(0.1, 0.2, 0.3, 1.0),
+        };
+        let arr = test_vec_fields::VecData::to_array(d);
+        let d2 = test_vec_fields::VecData::from_array(arr);
+        assert_eq!(d, d2);
+
+        // Via slab.
+        let mut slab = [0u32; 18];
+        slab_write(&mut slab, 0, &d);
+        let d3: test_vec_fields::VecData = slab_read(&slab, 0);
+        assert_eq!(d, d3);
+
+        // Non-zero offset.
+        slab_write(&mut slab, 9, &d);
+        let d4: test_vec_fields::VecData = slab_read(&slab, 9);
+        assert_eq!(d, d4);
+    }
+
+    #[test]
+    fn vec_field_raw_layout() {
+        use wgsl_rs::std::*;
+
+        let d = test_vec_fields::VecData {
+            pos: vec3f(1.0, 2.0, 3.0),
+            uv: vec2f(4.0, 5.0),
+            color: vec4f(6.0, 7.0, 8.0, 9.0),
+        };
+        let arr = test_vec_fields::VecData::to_array(d);
+        // pos: [1.0, 2.0, 3.0], uv: [4.0, 5.0], color: [6.0, 7.0, 8.0,
+        // 9.0]
+        for i in 0..9 {
+            assert_eq!(((i + 1) as f32).to_bits(), arr[i], "mismatch at index {i}");
+        }
+    }
+
+    #[test]
+    fn int_vec_field_round_trip() {
+        use wgsl_rs::std::*;
+
+        let d = test_vec_fields::IntVecData {
+            a: vec2i(-1, 42),
+            b: vec3u(10, 20, 30),
+            c: vec4b(true, false, true, false),
+        };
+        let arr = test_vec_fields::IntVecData::to_array(d);
+        let d2 = test_vec_fields::IntVecData::from_array(arr);
+        assert_eq!(d, d2);
+
+        let mut slab = [0u32; 18];
+        slab_write(&mut slab, 0, &d);
+        let d3: test_vec_fields::IntVecData = slab_read(&slab, 0);
+        assert_eq!(d, d3);
+    }
+
+    #[slab_module]
+    mod test_mat_fields {
+        // Note: matrix types in wgsl-rs don't derive Debug or PartialEq,
+        // so structs containing them can't derive those traits either.
+        #[slab_item]
+        #[derive(Clone, Copy, Default)]
+        pub struct MatData {
+            pub transform: Mat4x4f,
+            pub normal: Mat3x3f,
+        }
+
+        #[slab_item]
+        #[derive(Clone, Copy, Default)]
+        pub struct MixedData {
+            pub scale: f32,
+            pub offset: Vec3f,
+            pub matrix: Mat2x2f,
+            pub flags: u32,
+        }
+    }
+
+    #[test]
+    fn mat_field_slab_sizes() {
+        // MatData: Mat4x4f(16) + Mat3x3f(9) = 25.
+        assert_eq!(25, test_mat_fields::MatData::SLAB_SIZE);
+
+        // MixedData: f32(1) + Vec3f(3) + Mat2x2f(4) + u32(1) = 9.
+        assert_eq!(9, test_mat_fields::MixedData::SLAB_SIZE);
+    }
+
+    #[test]
+    fn mat_field_round_trip() {
+        use wgsl_rs::std::*;
+
+        let d = test_mat_fields::MatData {
+            transform: mat4x4f(
+                vec4f(1.0, 0.0, 0.0, 0.0),
+                vec4f(0.0, 1.0, 0.0, 0.0),
+                vec4f(0.0, 0.0, 1.0, 0.0),
+                vec4f(0.0, 0.0, 0.0, 1.0),
+            ),
+            normal: mat3x3f(
+                vec3f(1.0, 0.0, 0.0),
+                vec3f(0.0, 1.0, 0.0),
+                vec3f(0.0, 0.0, 1.0),
+            ),
+        };
+        let arr = test_mat_fields::MatData::to_array(d);
+        let d2 = test_mat_fields::MatData::from_array(arr);
+        assert_eq!(d.transform[0usize], d2.transform[0usize]);
+        assert_eq!(d.transform[1usize], d2.transform[1usize]);
+        assert_eq!(d.transform[2usize], d2.transform[2usize]);
+        assert_eq!(d.transform[3usize], d2.transform[3usize]);
+        assert_eq!(d.normal[0usize], d2.normal[0usize]);
+        assert_eq!(d.normal[1usize], d2.normal[1usize]);
+        assert_eq!(d.normal[2usize], d2.normal[2usize]);
+
+        // Via slab.
+        let mut slab = [0u32; 50];
+        slab_write(&mut slab, 0, &d);
+        let d3: test_mat_fields::MatData = slab_read(&slab, 0);
+        assert_eq!(d.transform[0usize], d3.transform[0usize]);
+        assert_eq!(d.transform[3usize], d3.transform[3usize]);
+        assert_eq!(d.normal[2usize], d3.normal[2usize]);
+    }
+
+    #[test]
+    fn mixed_field_round_trip() {
+        use wgsl_rs::std::*;
+
+        let d = test_mat_fields::MixedData {
+            scale: 2.5,
+            offset: vec3f(10.0, 20.0, 30.0),
+            matrix: mat2x2f(vec2f(1.0, 0.0), vec2f(0.0, 1.0)),
+            flags: 0xFF,
+        };
+        let arr = test_mat_fields::MixedData::to_array(d);
+        let d2 = test_mat_fields::MixedData::from_array(arr);
+        assert_eq!(d.scale, d2.scale);
+        assert_eq!(d.offset, d2.offset);
+        assert_eq!(d.matrix[0usize], d2.matrix[0usize]);
+        assert_eq!(d.matrix[1usize], d2.matrix[1usize]);
+        assert_eq!(d.flags, d2.flags);
+
+        // Via slab.
+        let mut slab = [0u32; 18];
+        slab_write(&mut slab, 0, &d);
+        let d3: test_mat_fields::MixedData = slab_read(&slab, 0);
+        assert_eq!(d.scale, d3.scale);
+        assert_eq!(d.offset, d3.offset);
+        assert_eq!(d.flags, d3.flags);
+    }
+
+    #[slab_module(wgsl())]
+    mod wgsl_vec_test {
+        #[slab_item]
+        #[derive(Clone, Copy, Debug, Default, PartialEq)]
+        pub struct Vertex {
+            pub position: Vec3f,
+            pub normal: Vec3f,
+            pub uv: Vec2f,
+        }
+    }
+
+    #[test]
+    fn wgsl_vec_module_is_generated() {
+        let source = wgsl_vec_test::WGSL_MODULE.wgsl_source();
+        assert!(!source.is_empty(), "WGSL source should not be empty");
+    }
+
+    #[test]
+    fn wgsl_vec_module_contains_struct() {
+        let source = wgsl_vec_test::WGSL_MODULE.wgsl_source();
+        let source_str = source.join("\n");
+        assert!(
+            source_str.contains("struct Vertex"),
+            "WGSL source should contain 'struct Vertex', got:\n{source_str}"
+        );
+    }
+
+    #[test]
+    fn wgsl_vec_types_work_on_cpu() {
+        use wgsl_rs::std::*;
+
+        let v = wgsl_vec_test::Vertex {
+            position: vec3f(1.0, 2.0, 3.0),
+            normal: vec3f(0.0, 1.0, 0.0),
+            uv: vec2f(0.5, 0.5),
+        };
+        let arr = wgsl_vec_test::Vertex::to_array(v);
+        let v2 = wgsl_vec_test::Vertex::from_array(arr);
+        assert_eq!(v, v2);
+
+        let mut slab = [0u32; 16];
+        slab_write(&mut slab, 0, &v);
+        let v3: wgsl_vec_test::Vertex = slab_read(&slab, 0);
+        assert_eq!(v, v3);
     }
 }

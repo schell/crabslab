@@ -687,10 +687,25 @@ fn generate_slab_item_proxy(type_name: &syn::Ident) -> syn::Item {
 // ---------------------------------------------------------------------------
 
 /// Return a `TokenStream2` expression for the slab size of a field type.
-/// Primitives are inlined as literals; other types use `Type::SLAB_SIZE`.
+/// Primitives and wgsl-rs vector/matrix types are inlined as literals;
+/// other types use `Type::SLAB_SIZE`.
 fn field_slab_size_expr(ty: &syn::Type) -> TokenStream2 {
     match type_name_str(ty).as_deref() {
         Some("u32" | "i32" | "f32" | "bool") => quote! { 1usize },
+        // wgsl-rs vector types
+        Some("Vec2f" | "Vec2i" | "Vec2u" | "Vec2b") => quote! { 2usize },
+        Some("Vec3f" | "Vec3i" | "Vec3u" | "Vec3b") => quote! { 3usize },
+        Some("Vec4f" | "Vec4i" | "Vec4u" | "Vec4b") => quote! { 4usize },
+        // wgsl-rs matrix types
+        Some("Mat2x2f" | "Mat2f") => quote! { 4usize },
+        Some("Mat2x3f") => quote! { 6usize },
+        Some("Mat2x4f") => quote! { 8usize },
+        Some("Mat3x2f") => quote! { 6usize },
+        Some("Mat3x3f" | "Mat3f") => quote! { 9usize },
+        Some("Mat3x4f") => quote! { 12usize },
+        Some("Mat4x2f") => quote! { 8usize },
+        Some("Mat4x3f") => quote! { 12usize },
+        Some("Mat4x4f" | "Mat4f") => quote! { 16usize },
         _ => quote! { #ty::SLAB_SIZE },
     }
 }
@@ -699,10 +714,12 @@ fn field_slab_size_expr(ty: &syn::Type) -> TokenStream2 {
 /// field from a `u32s` array at the given offset.
 ///
 /// For primitive types the pre-statements are empty and the expression
-/// reads directly from `u32s`. For nested `#[slab_item]` types the
-/// pre-statements read a sub-array into a local variable so that the
-/// struct literal field can use a simple expression (WGSL does not
-/// support block expressions as struct field initializers).
+/// reads directly from `u32s`. For wgsl-rs vector/matrix types the
+/// pre-statements read components and construct the value. For nested
+/// `#[slab_item]` types the pre-statements read a sub-array into a
+/// local variable so that the struct literal field can use a simple
+/// expression (WGSL does not support block expressions as struct field
+/// initializers).
 fn field_from_array_parts(
     ty: &syn::Type,
     offset: &TokenStream2,
@@ -713,6 +730,162 @@ fn field_from_array_parts(
         Some("f32") => (vec![], quote! { bitcast_f32(u32s[#offset]) }),
         Some("i32") => (vec![], quote! { bitcast_i32(u32s[#offset]) }),
         Some("bool") => (vec![], quote! { u32s[#offset] != 0u32 }),
+
+        // -- wgsl-rs Vec2 types -------------------------------------------
+        Some("Vec2f") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec2f(
+                    bitcast_f32(u32s[#offset]),
+                    bitcast_f32(u32s[#offset + 1usize]),
+                );
+            }];
+            (pre, quote! { #val })
+        }
+        Some("Vec2i") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec2i(
+                    bitcast_i32(u32s[#offset]),
+                    bitcast_i32(u32s[#offset + 1usize]),
+                );
+            }];
+            (pre, quote! { #val })
+        }
+        Some("Vec2u") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec2u(
+                    u32s[#offset],
+                    u32s[#offset + 1usize],
+                );
+            }];
+            (pre, quote! { #val })
+        }
+        Some("Vec2b") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec2b(
+                    u32s[#offset] != 0u32,
+                    u32s[#offset + 1usize] != 0u32,
+                );
+            }];
+            (pre, quote! { #val })
+        }
+
+        // -- wgsl-rs Vec3 types -------------------------------------------
+        Some("Vec3f") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec3f(
+                    bitcast_f32(u32s[#offset]),
+                    bitcast_f32(u32s[#offset + 1usize]),
+                    bitcast_f32(u32s[#offset + 2usize]),
+                );
+            }];
+            (pre, quote! { #val })
+        }
+        Some("Vec3i") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec3i(
+                    bitcast_i32(u32s[#offset]),
+                    bitcast_i32(u32s[#offset + 1usize]),
+                    bitcast_i32(u32s[#offset + 2usize]),
+                );
+            }];
+            (pre, quote! { #val })
+        }
+        Some("Vec3u") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec3u(
+                    u32s[#offset],
+                    u32s[#offset + 1usize],
+                    u32s[#offset + 2usize],
+                );
+            }];
+            (pre, quote! { #val })
+        }
+        Some("Vec3b") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec3b(
+                    u32s[#offset] != 0u32,
+                    u32s[#offset + 1usize] != 0u32,
+                    u32s[#offset + 2usize] != 0u32,
+                );
+            }];
+            (pre, quote! { #val })
+        }
+
+        // -- wgsl-rs Vec4 types -------------------------------------------
+        Some("Vec4f") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec4f(
+                    bitcast_f32(u32s[#offset]),
+                    bitcast_f32(u32s[#offset + 1usize]),
+                    bitcast_f32(u32s[#offset + 2usize]),
+                    bitcast_f32(u32s[#offset + 3usize]),
+                );
+            }];
+            (pre, quote! { #val })
+        }
+        Some("Vec4i") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec4i(
+                    bitcast_i32(u32s[#offset]),
+                    bitcast_i32(u32s[#offset + 1usize]),
+                    bitcast_i32(u32s[#offset + 2usize]),
+                    bitcast_i32(u32s[#offset + 3usize]),
+                );
+            }];
+            (pre, quote! { #val })
+        }
+        Some("Vec4u") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec4u(
+                    u32s[#offset],
+                    u32s[#offset + 1usize],
+                    u32s[#offset + 2usize],
+                    u32s[#offset + 3usize],
+                );
+            }];
+            (pre, quote! { #val })
+        }
+        Some("Vec4b") => {
+            let val = format_ident!("val_{}", field_name);
+            let pre = vec![quote! {
+                let #val = vec4b(
+                    u32s[#offset] != 0u32,
+                    u32s[#offset + 1usize] != 0u32,
+                    u32s[#offset + 2usize] != 0u32,
+                    u32s[#offset + 3usize] != 0u32,
+                );
+            }];
+            (pre, quote! { #val })
+        }
+
+        // -- wgsl-rs matrix types -----------------------------------------
+        Some(name @ ("Mat2x2f" | "Mat2f")) => {
+            vec_matrix_from_array_parts(name, field_name, offset, 2, 2)
+        }
+        Some(name @ "Mat2x3f") => vec_matrix_from_array_parts(name, field_name, offset, 2, 3),
+        Some(name @ "Mat2x4f") => vec_matrix_from_array_parts(name, field_name, offset, 2, 4),
+        Some(name @ "Mat3x2f") => vec_matrix_from_array_parts(name, field_name, offset, 3, 2),
+        Some(name @ ("Mat3x3f" | "Mat3f")) => {
+            vec_matrix_from_array_parts(name, field_name, offset, 3, 3)
+        }
+        Some(name @ "Mat3x4f") => vec_matrix_from_array_parts(name, field_name, offset, 3, 4),
+        Some(name @ "Mat4x2f") => vec_matrix_from_array_parts(name, field_name, offset, 4, 2),
+        Some(name @ "Mat4x3f") => vec_matrix_from_array_parts(name, field_name, offset, 4, 3),
+        Some(name @ ("Mat4x4f" | "Mat4f")) => {
+            vec_matrix_from_array_parts(name, field_name, offset, 4, 4)
+        }
+
         _ => {
             // Nested slab_item type: generate pre-statements to read the
             // sub-array, then use the local variable in the struct literal.
@@ -725,6 +898,86 @@ fn field_from_array_parts(
             ];
             (pre, quote! { #val_ident })
         }
+    }
+}
+
+/// Generate pre-computation statements and a value expression to read a
+/// wgsl-rs matrix field from a `u32s` array.
+///
+/// Matrices are column-major. Each column is a `VecRf` with `rows`
+/// components. The matrix has `cols` columns.
+fn vec_matrix_from_array_parts(
+    _mat_name: &str,
+    field_name: &syn::Ident,
+    offset: &TokenStream2,
+    cols: usize,
+    rows: usize,
+) -> (Vec<TokenStream2>, TokenStream2) {
+    let val = format_ident!("val_{}", field_name);
+
+    // Generate column read expressions.
+    let col_exprs: Vec<TokenStream2> = (0..cols)
+        .map(|c| {
+            let col_offset = c * rows;
+            vec_read_expr(rows, offset, col_offset)
+        })
+        .collect();
+
+    // Pick the correct constructor name (e.g., mat3x4f).
+    let ctor = format_ident!("mat{}x{}f", cols, rows);
+
+    let pre = vec![quote! {
+        let #val = #ctor(#(#col_exprs),*);
+    }];
+
+    (pre, quote! { #val })
+}
+
+/// Generate a token stream expression that reads a `VecNf` from `u32s`
+/// at `base_offset + component_offset`.
+fn vec_read_expr(
+    components: usize,
+    base_offset: &TokenStream2,
+    component_offset: usize,
+) -> TokenStream2 {
+    match components {
+        2 => {
+            let o0 = component_offset;
+            let o1 = component_offset + 1;
+            quote! {
+                vec2f(
+                    bitcast_f32(u32s[#base_offset + #o0]),
+                    bitcast_f32(u32s[#base_offset + #o1]),
+                )
+            }
+        }
+        3 => {
+            let o0 = component_offset;
+            let o1 = component_offset + 1;
+            let o2 = component_offset + 2;
+            quote! {
+                vec3f(
+                    bitcast_f32(u32s[#base_offset + #o0]),
+                    bitcast_f32(u32s[#base_offset + #o1]),
+                    bitcast_f32(u32s[#base_offset + #o2]),
+                )
+            }
+        }
+        4 => {
+            let o0 = component_offset;
+            let o1 = component_offset + 1;
+            let o2 = component_offset + 2;
+            let o3 = component_offset + 3;
+            quote! {
+                vec4f(
+                    bitcast_f32(u32s[#base_offset + #o0]),
+                    bitcast_f32(u32s[#base_offset + #o1]),
+                    bitcast_f32(u32s[#base_offset + #o2]),
+                    bitcast_f32(u32s[#base_offset + #o3]),
+                )
+            }
+        }
+        _ => unreachable!("invalid vector component count: {components}"),
     }
 }
 
@@ -742,6 +995,84 @@ fn field_to_array_stmt(
         Some("bool") => {
             quote! { arr[#offset] = if d.#field_name { 1u32 } else { 0u32 }; }
         }
+
+        // -- wgsl-rs Vec2 types -------------------------------------------
+        Some("Vec2f") => quote! {
+            arr[#offset] = bitcast_u32(d.#field_name.x);
+            arr[#offset + 1usize] = bitcast_u32(d.#field_name.y);
+        },
+        Some("Vec2i") => quote! {
+            arr[#offset] = bitcast_u32(d.#field_name.x);
+            arr[#offset + 1usize] = bitcast_u32(d.#field_name.y);
+        },
+        Some("Vec2u") => quote! {
+            arr[#offset] = d.#field_name.x;
+            arr[#offset + 1usize] = d.#field_name.y;
+        },
+        Some("Vec2b") => quote! {
+            arr[#offset] = if d.#field_name.x { 1u32 } else { 0u32 };
+            arr[#offset + 1usize] = if d.#field_name.y { 1u32 } else { 0u32 };
+        },
+
+        // -- wgsl-rs Vec3 types -------------------------------------------
+        Some("Vec3f") => quote! {
+            arr[#offset] = bitcast_u32(d.#field_name.x);
+            arr[#offset + 1usize] = bitcast_u32(d.#field_name.y);
+            arr[#offset + 2usize] = bitcast_u32(d.#field_name.z);
+        },
+        Some("Vec3i") => quote! {
+            arr[#offset] = bitcast_u32(d.#field_name.x);
+            arr[#offset + 1usize] = bitcast_u32(d.#field_name.y);
+            arr[#offset + 2usize] = bitcast_u32(d.#field_name.z);
+        },
+        Some("Vec3u") => quote! {
+            arr[#offset] = d.#field_name.x;
+            arr[#offset + 1usize] = d.#field_name.y;
+            arr[#offset + 2usize] = d.#field_name.z;
+        },
+        Some("Vec3b") => quote! {
+            arr[#offset] = if d.#field_name.x { 1u32 } else { 0u32 };
+            arr[#offset + 1usize] = if d.#field_name.y { 1u32 } else { 0u32 };
+            arr[#offset + 2usize] = if d.#field_name.z { 1u32 } else { 0u32 };
+        },
+
+        // -- wgsl-rs Vec4 types -------------------------------------------
+        Some("Vec4f") => quote! {
+            arr[#offset] = bitcast_u32(d.#field_name.x);
+            arr[#offset + 1usize] = bitcast_u32(d.#field_name.y);
+            arr[#offset + 2usize] = bitcast_u32(d.#field_name.z);
+            arr[#offset + 3usize] = bitcast_u32(d.#field_name.w);
+        },
+        Some("Vec4i") => quote! {
+            arr[#offset] = bitcast_u32(d.#field_name.x);
+            arr[#offset + 1usize] = bitcast_u32(d.#field_name.y);
+            arr[#offset + 2usize] = bitcast_u32(d.#field_name.z);
+            arr[#offset + 3usize] = bitcast_u32(d.#field_name.w);
+        },
+        Some("Vec4u") => quote! {
+            arr[#offset] = d.#field_name.x;
+            arr[#offset + 1usize] = d.#field_name.y;
+            arr[#offset + 2usize] = d.#field_name.z;
+            arr[#offset + 3usize] = d.#field_name.w;
+        },
+        Some("Vec4b") => quote! {
+            arr[#offset] = if d.#field_name.x { 1u32 } else { 0u32 };
+            arr[#offset + 1usize] = if d.#field_name.y { 1u32 } else { 0u32 };
+            arr[#offset + 2usize] = if d.#field_name.z { 1u32 } else { 0u32 };
+            arr[#offset + 3usize] = if d.#field_name.w { 1u32 } else { 0u32 };
+        },
+
+        // -- wgsl-rs matrix types -----------------------------------------
+        Some("Mat2x2f" | "Mat2f") => vec_matrix_to_array_stmt(field_name, offset, 2, 2),
+        Some("Mat2x3f") => vec_matrix_to_array_stmt(field_name, offset, 2, 3),
+        Some("Mat2x4f") => vec_matrix_to_array_stmt(field_name, offset, 2, 4),
+        Some("Mat3x2f") => vec_matrix_to_array_stmt(field_name, offset, 3, 2),
+        Some("Mat3x3f" | "Mat3f") => vec_matrix_to_array_stmt(field_name, offset, 3, 3),
+        Some("Mat3x4f") => vec_matrix_to_array_stmt(field_name, offset, 3, 4),
+        Some("Mat4x2f") => vec_matrix_to_array_stmt(field_name, offset, 4, 2),
+        Some("Mat4x3f") => vec_matrix_to_array_stmt(field_name, offset, 4, 3),
+        Some("Mat4x4f" | "Mat4f") => vec_matrix_to_array_stmt(field_name, offset, 4, 4),
+
         _ => {
             // Nested slab_item type: copy sub-array via slab_write_array!.
             quote! {
@@ -752,6 +1083,59 @@ fn field_to_array_stmt(
             }
         }
     }
+}
+
+/// Generate statements to write a wgsl-rs matrix field into an `arr` array.
+///
+/// Matrices are column-major. Each column is accessed via `d.field[col_idx]`
+/// and each component is bitcast to u32.
+fn vec_matrix_to_array_stmt(
+    field_name: &syn::Ident,
+    offset: &TokenStream2,
+    cols: usize,
+    rows: usize,
+) -> TokenStream2 {
+    let mut stmts = Vec::new();
+
+    for c in 0..cols {
+        let col_base = c * rows;
+        let col_idx = c;
+        match rows {
+            2 => {
+                let o0 = col_base;
+                let o1 = col_base + 1;
+                stmts.push(quote! {
+                    arr[#offset + #o0] = bitcast_u32(d.#field_name[#col_idx].x);
+                    arr[#offset + #o1] = bitcast_u32(d.#field_name[#col_idx].y);
+                });
+            }
+            3 => {
+                let o0 = col_base;
+                let o1 = col_base + 1;
+                let o2 = col_base + 2;
+                stmts.push(quote! {
+                    arr[#offset + #o0] = bitcast_u32(d.#field_name[#col_idx].x);
+                    arr[#offset + #o1] = bitcast_u32(d.#field_name[#col_idx].y);
+                    arr[#offset + #o2] = bitcast_u32(d.#field_name[#col_idx].z);
+                });
+            }
+            4 => {
+                let o0 = col_base;
+                let o1 = col_base + 1;
+                let o2 = col_base + 2;
+                let o3 = col_base + 3;
+                stmts.push(quote! {
+                    arr[#offset + #o0] = bitcast_u32(d.#field_name[#col_idx].x);
+                    arr[#offset + #o1] = bitcast_u32(d.#field_name[#col_idx].y);
+                    arr[#offset + #o2] = bitcast_u32(d.#field_name[#col_idx].z);
+                    arr[#offset + #o3] = bitcast_u32(d.#field_name[#col_idx].w);
+                });
+            }
+            _ => unreachable!("invalid matrix row count: {rows}"),
+        }
+    }
+
+    quote! { #(#stmts)* }
 }
 
 /// Build cumulative offset expressions for each field in a struct.
