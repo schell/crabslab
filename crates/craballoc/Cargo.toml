@@ -10,13 +10,14 @@ categories = ["rendering", "game-development", "graphics"]
 readme = "README.md"
 
 [features]
-default = ["wgpu"]
+default = ["wgpu", "wgsl-rs"]
 wgpu = ["dep:wgpu"]
+wgsl-rs = ["crabslab/wgsl-rs"]
 
 [dependencies]
 async-channel.workspace = true
 bytemuck.workspace = true
-crabslab = { path = "../crabslab", features = ["wgsl-rs"] }
+crabslab = { path = "../crabslab" }
 log.workspace = true
 rustc-hash.workspace = true
 snafu.workspace = true
