@@ -6,8 +6,13 @@ description = "Slab allocator for CPU/GPU data marshalling via wgsl-rs"
 repository = "https://github.com/schell/crabslab"
 license = "MIT OR Apache-2.0"
 
+[features]
+default = []
+wgsl-rs = ["dep:wgsl-rs"]
+
 [dependencies]
 crabslab-macros = { path = "../crabslab-macros" }
+wgsl-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 wgsl-rs = { workspace = true }
