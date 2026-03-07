@@ -117,6 +117,17 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
             _phantom: PhantomData,
         }
     }
+
+    /// Sets whether or not this `Value` should sychronize its data from the GPU
+    /// when [`Arena::synchronize`] is called.
+    ///
+    /// If `should_sync` is `true`, this `Value` will synchronize.
+    /// If `should_sync` is `false` this `Value` **will not** synchronize.
+    ///
+    /// Consider using one of the `into_*` functions instead.
+    pub fn set_gpu_sync(&self, should_sync: bool) {
+        self.update_source.set_gpu_sync(should_sync);
+    }
 }
 
 impl<T: ?Sized, S> std::fmt::Debug for Value<T, S> {
