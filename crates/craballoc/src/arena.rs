@@ -57,6 +57,59 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
     pub fn slab_range(&self) -> Range {
         self.update_source.source_id().range
     }
+
+    /// Convert to bidirectional sync (CPU→GPU on commit, GPU→CPU on
+    /// synchronize).
+    pub fn into_bidirectional(self) -> Value<T, SyncBidirectional> {
+        self.update_source.set_gpu_sync(true);
+        Value {
+            update_source: self.update_source,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Convert to one-way CPU→GPU sync. Changes made via [`Value::modify`]
+    /// and [`Value::set`] are sent to the GPU on commit, but GPU changes
+    /// are **not** read back on synchronize.
+    pub fn into_one_way_from_cpu(self) -> Value<T, SyncOneWayFromCpu> {
+        self.update_source.set_gpu_sync(false);
+        Value {
+            update_source: self.update_source,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Convert to one-way GPU→CPU sync. The GPU value is read back into
+    /// the CPU cache on synchronize, but CPU-side modification methods
+    /// ([`Value::modify`], [`Value::set`]) are not available.
+    pub fn into_one_way_from_gpu(self) -> Value<T, SyncOneWayFromGpu> {
+        self.update_source.set_gpu_sync(true);
+        Value {
+            update_source: self.update_source,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Convert to no sync. The value occupies slab space but is neither
+    /// written to the GPU on commit nor read back on synchronize.
+    pub fn into_sync_none(self) -> Value<T, SyncNone> {
+        self.update_source.set_gpu_sync(false);
+        Value {
+            update_source: self.update_source,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Sets whether or not this `Value` should sychronize its data from the GPU
+    /// when [`Arena::synchronize`] is called.
+    ///
+    /// If `should_sync` is `true`, this `Value` will synchronize.
+    /// If `should_sync` is `false` this `Value` **will not** synchronize.
+    ///
+    /// Consider using one of the `into_*` functions instead.
+    pub fn set_gpu_sync(&self, should_sync: bool) {
+        self.update_source.set_gpu_sync(should_sync);
+    }
 }
 
 impl<T: ?Sized, S> std::fmt::Debug for Value<T, S> {
@@ -165,13 +218,13 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
         })
     }
 
-    pub fn modify_item<X>(&self, index: u32, f: impl FnOnce(&mut T) -> X) -> Option<X> {
-        (index < self.len() as u32).then_some(())?;
+    pub fn modify_item<X>(&self, index: usize, f: impl FnOnce(&mut T) -> X) -> Option<X> {
+        (index < self.len()).then_some(())?;
         Some(self.modify_range(index..=index, |ts| f(&mut ts[0])))
     }
 
-    pub fn read_item<X>(&self, index: u32, f: impl FnOnce(&T) -> X) -> Option<X> {
-        (index < self.len() as u32).then_some(())?;
+    pub fn read_item<X>(&self, index: usize, f: impl FnOnce(&T) -> X) -> Option<X> {
+        (index < self.len()).then_some(())?;
         Some(self.read_range(index..=index, |ts| f(&ts[0])))
     }
 
@@ -454,11 +507,37 @@ impl<R: IsRuntime> Arena<R> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::runtime::CpuRuntime;
 
     #[test]
     fn range_full() {
         let arena = Arena::new(&crate::wgpu_runtime(), "tests", None);
         let values = arena.new_array(0u32..10);
         assert_eq!(10, values.len());
+    }
+
+    #[test]
+    fn value_sync_conversion() {
+        let arena = Arena::new(&CpuRuntime, "test", None);
+        let v = arena.new_value(42u32);
+        assert_eq!(42, v.get());
+
+        // Bidirectional → one-way-from-cpu: can still modify/get
+        let v = v.into_one_way_from_cpu();
+        v.set(100);
+        assert_eq!(100, v.get());
+
+        // One-way-from-cpu → one-way-from-gpu: read slab_range still works
+        let v = v.into_one_way_from_gpu();
+        assert_eq!(v.slab_range().len(), 1);
+
+        // One-way-from-gpu → sync-none
+        let v = v.into_sync_none();
+        assert_eq!(v.slab_range().len(), 1);
+
+        // Sync-none → back to bidirectional: can modify/get again
+        let v = v.into_bidirectional();
+        v.set(200);
+        assert_eq!(200, v.get());
     }
 }
