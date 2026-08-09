@@ -583,3 +583,17 @@ pub fn impl_slabitem_tuples(input: proc_macro::TokenStream) -> proc_macro::Token
     };
     output.into()
 }
+
+/// Marker attribute for slab item structs.
+///
+/// On the CPU, this is a no-op — the `#[derive(SlabItem)]` derive handles
+/// the CPU-side impl. On the GPU (inside `#[wgsl]`), this attribute is
+/// preserved in the IR and the `SlabItemExt` extension recognizes it to
+/// generate `SLAB_SIZE`, `from_array`, `to_array`, and `array_container`.
+#[proc_macro_attribute]
+pub fn slab_item(
+    _attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    item
+}

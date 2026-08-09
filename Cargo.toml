@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "crates/craballoc",
-    "crates/craballoc-test-shaders",
-    "crates/craballoc-test-wire-types",
+    # "crates/craballoc",
+    # "crates/craballoc-test-shaders",
+    # "crates/craballoc-test-wire-types",
     "crates/crabslab",
     "crates/crabslab-derive",
 ]
@@ -23,9 +23,7 @@ pretty_assertions = "1.4.1"
 proptest = "1.9.0"
 rustc-hash = "1.1"
 snafu = "0.8"
-spirv-std = { git = "https://github.com/rust-gpu/rust-gpu.git", rev = "b3eda4df9814b6176d3c0844eb67f70a22ebb378" }
 tracing = "0.1.41"
 wgpu = { version = "26.0.0", features = ["spirv"] }
+wgsl-rs = { path = "/Users/schell/code/wgsl-rs/main/crates/wgsl-rs" }
 
-[patch.crates-io]
-spirv-std = { git = "https://github.com/rust-gpu/rust-gpu.git", rev = "b3eda4df9814b6176d3c0844eb67f70a22ebb378" }
