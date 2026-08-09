@@ -132,7 +132,6 @@ impl<T> core::ops::Add<Id<T>> for u32 {
     }
 }
 
-#[cfg(not(target_arch = "spirv"))]
 impl<T: SlabItem> core::ops::Index<Id<T>> for [u32] {
     type Output = T;
 
@@ -143,7 +142,6 @@ impl<T: SlabItem> core::ops::Index<Id<T>> for [u32] {
     }
 }
 
-#[cfg(not(target_arch = "spirv"))]
 impl<T: SlabItem> core::ops::IndexMut<Id<T>> for [u32] {
     fn index_mut(&mut self, id: Id<T>) -> &mut Self::Output {
         let index = id.index();

@@ -16,7 +16,7 @@ use crate::SlabItem;
 /// [`SlabItem`] with the additional attribute `offset`:
 ///
 /// ```rust
-/// use crabslab::{Id, offset::Offset, Slab, SlabItem};
+/// use crabslab::{offset::Offset, Id, Slab, SlabItem};
 ///
 /// #[derive(Debug, Default, PartialEq, SlabItem)]
 /// #[offsets]

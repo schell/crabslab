@@ -157,7 +157,6 @@ impl<T> Array<T> {
         }
     }
 
-    #[cfg(not(target_arch = "spirv"))]
     /// Return the slice of the slab that this array represents.
     pub fn sub_slab<'a>(&'a self, slab: &'a [u32]) -> &'a [u32]
     where
