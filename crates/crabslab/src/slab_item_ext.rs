@@ -8,9 +8,9 @@
 //! 1. Generates `impl Type { ... }` blocks with `SLAB_SIZE`, `from_array`,
 //!    `to_array`, and `array_container` inherent methods for each struct.
 //! 2. Lowers `slab_read!(Type, slab, offset, dest)` `Stmt::Macro` invocations
-//!    into `Local` + `SlabRead` + `Local` IR statement sequences.
+//!    into `Local` + `SlabCopy` + `Local` IR statement sequences.
 //! 3. Lowers `slab_write!(Type, slab, offset, src)` `Stmt::Macro` invocations
-//!    into `Local` + `SlabWrite` IR statement sequences.
+//!    into `Local` + `SlabCopy` IR statement sequences.
 
 use wgsl_rs::ir;
 use wgsl_rs::WgslExtension;
@@ -360,13 +360,17 @@ fn make_from_array_field_expr(ty: &ir::Type, offset: u32) -> ir::Expr {
                         }),
                     }),
                 }),
-                ir::Stmt::SlabRead {
-                    slab: ir::Expr::Ident("arr".to_string()),
-                    offset: ir::Expr::Lit(ir::Lit::Int {
+                ir::Stmt::SlabCopy {
+                    src: ir::Expr::Ident("arr".to_string()),
+                    src_offset: ir::Expr::Lit(ir::Lit::Int {
                         digits: offset.to_string(),
                         suffix: "u32".to_string(),
                     }),
                     dest: ir::Expr::Ident(format!("sub_{name}")),
+                    dest_offset: ir::Expr::Lit(ir::Lit::Int {
+                        digits: "0".to_string(),
+                        suffix: "u32".to_string(),
+                    }),
                     size: ir::Expr::TypePath {
                         ty: name.clone(),
                         member: "SLAB_SIZE".to_string(),
@@ -744,10 +748,14 @@ fn lower_slab_read(args: &str) -> Vec<ir::Stmt> {
                 params: vec![],
             }),
         }),
-        ir::Stmt::SlabRead {
-            slab: ir::Expr::Ident(slab_expr.to_string()),
-            offset: offset_expr,
+        ir::Stmt::SlabCopy {
+            src: ir::Expr::Ident(slab_expr.to_string()),
+            src_offset: offset_expr,
             dest: ir::Expr::Ident("slab_read_buf".to_string()),
+            dest_offset: ir::Expr::Lit(ir::Lit::Int {
+                digits: "0".to_string(),
+                suffix: "u32".to_string(),
+            }),
             size: ir::Expr::TypePath {
                 ty: type_name.to_string(),
                 member: "SLAB_SIZE".to_string(),
@@ -804,14 +812,18 @@ fn lower_slab_write(args: &str) -> Vec<ir::Stmt> {
                 params: vec![ir::Expr::Ident(src_name.to_string())],
             }),
         }),
-        ir::Stmt::SlabWrite {
-            slab: ir::Expr::Ident(slab_expr.to_string()),
-            offset: offset_expr,
+        ir::Stmt::SlabCopy {
             src: ir::Expr::Ident("slab_write_out".to_string()),
-            size: Some(ir::Expr::TypePath {
+            src_offset: ir::Expr::Lit(ir::Lit::Int {
+                digits: "0".to_string(),
+                suffix: "u32".to_string(),
+            }),
+            dest: ir::Expr::Ident(slab_expr.to_string()),
+            dest_offset: offset_expr,
+            size: ir::Expr::TypePath {
                 ty: type_name.to_string(),
                 member: "SLAB_SIZE".to_string(),
-            }),
+            },
         },
     ]
 }

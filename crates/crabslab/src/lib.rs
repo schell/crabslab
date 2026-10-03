@@ -1,6 +1,10 @@
 //! Creating and crafting a tasty slab of memory.
 #![doc = include_str!("../README.md")]
 
+// Allow the `#[derive(SlabItem)]` macro to reference `crabslab::SlabItem`
+// from within the crate itself.
+pub extern crate self as crabslab;
+
 mod array;
 mod id;
 mod slab;
@@ -13,7 +17,6 @@ pub use array::*;
 pub use id::*;
 pub use slab::*;
 
-pub use crabslab_derive::slab_item;
 pub use crabslab_derive::SlabItem;
 
 pub mod wgsl_impl;
