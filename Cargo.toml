@@ -25,5 +25,5 @@ rustc-hash = "1.1"
 snafu = "0.8"
 tracing = "0.1.41"
 wgpu = { version = "26.0.0", features = ["spirv"] }
-wgsl-rs = { path = "/Users/schell/code/wgsl-rs/main/crates/wgsl-rs" }
+wgsl-rs = "0.1.0-beta.3"
 
