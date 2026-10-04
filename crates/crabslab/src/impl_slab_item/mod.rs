@@ -1,4 +1,3 @@
-mod arrays;
 mod primitives;
 mod tuples;
 

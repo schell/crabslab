@@ -414,26 +414,58 @@ mod test {
     }
 
     #[test]
+    fn derived_array_field_round_trip() {
+        #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+        struct WithArray {
+            id: u32,
+            weights: [f32; 4],
+            tag: [u32; 2],
+        }
+
+        // Array fields are walked element-wise, not as slab items.
+        assert_eq!(7, WithArray::SLAB_SIZE);
+
+        let value = WithArray {
+            id: 7,
+            weights: [1.0, -2.5, 3.0, 4.0],
+            tag: [8, 9],
+        };
+        let mut slab = CpuSlab::new(vec![]);
+        let id = slab.append(&value);
+        assert_eq!(value, slab.read(id));
+
+        // Verify the wire format: elements packed contiguously after the
+        // scalar field, with no padding.
+        let raw = slab.as_ref();
+        assert_eq!(7, raw[0]);
+        assert_eq!(1.0f32.to_bits(), raw[1]);
+        assert_eq!((-2.5f32).to_bits(), raw[2]);
+        assert_eq!(8, raw[5]);
+        assert_eq!(9, raw[6]);
+    }
+
+    #[test]
     fn slab_array_readwrite() {
         let mut slab = [0u32; 16];
         slab.write_indexed(&42, 0);
         slab.write_indexed(&666, 1);
-        let t = slab.read(Id::<[u32; 2]>::new(0));
-        assert_eq!([42, 666], t);
         let t: Vec<u32> = slab.read_vec(Array::new(Id::ZERO, 2));
         assert_eq!([42, 666], t[..]);
         slab.write_indexed_slice(&[1, 2, 3, 4], 2);
         let t: Vec<u32> = slab.read_vec(Array::new(Id::new(2), 4));
         assert_eq!([1, 2, 3, 4], t[..]);
 
-        // use _f32 explicit, otherwise it fails
-        slab.write_indexed_slice(&[[1.0_f32, 2.0, 3.0, 4.0], [5.5, 6.5, 7.5, 8.5]], 0);
+        // Fixed-size arrays are not slab items; write and read their
+        // elements.
+        let floats = [1.0_f32, 2.0, 3.0, 4.0, 5.5, 6.5, 7.5, 8.5];
+        slab.write_indexed_slice(&floats, 0);
 
-        let arr = Array::<[f32; 4]>::new(Id::ZERO, 2);
+        let arr = Array::<f32>::new(Id::ZERO, 8);
         assert_eq!(Id::new(0), arr.at(0));
-        assert_eq!(Id::new(4), arr.at(1));
-        assert_eq!([1.0, 2.0, 3.0, 4.0], slab.read(arr.at(0)));
-        assert_eq!([5.5, 6.5, 7.5, 8.5], slab.read(arr.at(1)));
+        assert_eq!(Id::new(7), arr.at(7));
+        assert_eq!(1.0, slab.read(arr.at(0)));
+        assert_eq!(4.0, slab.read(arr.at(3)));
+        assert_eq!(8.5, slab.read(arr.at(7)));
 
         let geometry = vec![
             Vertex {
