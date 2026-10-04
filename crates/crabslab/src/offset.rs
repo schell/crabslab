@@ -18,7 +18,7 @@ use crate::SlabItem;
 /// ```rust
 /// use crabslab::{offset::Offset, Id, Slab, SlabItem};
 ///
-/// #[derive(Debug, Default, PartialEq, SlabItem)]
+/// #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
 /// #[offsets]
 /// pub struct Parent {
 ///     pub child_a: u32,
@@ -46,19 +46,19 @@ use crate::SlabItem;
 /// ```rust, compile_fail
 /// use crabslab::*;
 ///
-/// #[derive(Debug, Default, PartialEq, SlabItem)]
+/// #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
 /// #[offsets]
 /// pub struct Child {
 ///     pub value: u32,
 /// }
 ///
-/// #[derive(Debug, Default, PartialEq, SlabItem)]
+/// #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
 /// #[offsets]
 /// pub struct Changeling {
 ///     pub value: u32,
 /// }
 ///
-/// #[derive(Debug, Default, PartialEq, SlabItem)]
+/// #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
 /// #[offsets]
 /// pub struct Parent {
 ///     pub child: Child,

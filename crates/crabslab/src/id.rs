@@ -1,7 +1,7 @@
 //! Typed identifiers that can also be used as indices.
 use core::marker::PhantomData;
 
-use crate::{slab::SlabItem, Slab};
+use crate::SlabItem;
 
 /// `u32` value of an [`Id`] that does not point to any item.
 pub const ID_NONE: u32 = u32::MAX;
@@ -10,17 +10,20 @@ pub const ID_NONE: u32 = u32::MAX;
 #[repr(transparent)]
 pub struct Id<T>(pub(crate) u32, PhantomData<T>);
 
-impl<T: core::any::Any> SlabItem for Id<T> {
-    const SLAB_SIZE: usize = { 1 };
+impl<T> SlabItem for Id<T> {
+    const SLAB_SIZE: usize = 1;
+    type Array = [u32; 1];
 
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
-        let inner = slab.read_at(index);
-        Id::new(inner)
+    fn to_array(data: Self) -> Self::Array {
+        [data.0]
     }
 
-    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        slab.write_at(index, self.0);
-        index + 1
+    fn from_array(arr: Self::Array) -> Self {
+        Id::new(arr[0])
+    }
+
+    fn array_container() -> Self::Array {
+        [0]
     }
 }
 
@@ -191,7 +194,7 @@ impl<T: SlabItem> Id<T> {
 mod test {
     use super::*;
     use crate::{self as crabslab};
-    use crabslab::SlabItem;
+    use crabslab::{CpuSlabItem, SlabItem};
     use glam::Vec3;
 
     #[test]
