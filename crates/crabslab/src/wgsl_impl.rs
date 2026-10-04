@@ -33,6 +33,16 @@ pub mod slab {
         fn array_container() -> Self::Array;
     }
 
+    // NOTE: `[u32; Self::SLAB_SIZE]` in a trait method signature does not
+    // compile on stable Rust - `Self::SLAB_SIZE` is a generic projection and
+    // array lengths in type position must be evaluable before
+    // monomorphization (the `generic_const_exprs` feature would unlock it).
+    // This is the same blocker documented above on `type Array`.
+    //
+    // pub trait SlabThing: SlabItem {
+    //     fn to_slab(data: Self) -> [u32; Self::SLAB_SIZE];
+    // }
+
     impl SlabItem for u32 {
         const SLAB_SIZE: usize = 1;
         type Array = [u32; 1];
