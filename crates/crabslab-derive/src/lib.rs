@@ -31,6 +31,116 @@ impl FieldName {
     }
 }
 
+/// How a field participates in slab serialization.
+enum FieldTy {
+    /// A single `SlabItem` value.
+    Plain(Type),
+    /// A fixed-size array `[T; n]` field. Arrays are not themselves slab
+    /// items; the field walker serializes `n` elements contiguously, so
+    /// the element type carries the `SlabItem` requirement and the size
+    /// contribution is `n * T::SLAB_SIZE`.
+    Array { elem: Type, len: usize },
+}
+
+impl FieldTy {
+    /// Classify a declared field type. Array fields must have a literal
+    /// length so the walker can inline the element count in const
+    /// expressions.
+    fn from_type(ty: &Type) -> syn::Result<Self> {
+        if let syn::Type::Array(array) = ty {
+            // `elem` and `len` are `Box`ed; deref-coerce to the inner types.
+            let elem: &Type = &array.elem;
+            let len_expr: &syn::Expr = &array.len;
+            let len = match len_expr {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Int(int),
+                    ..
+                }) => int.base10_parse::<usize>().map_err(|_| {
+                    syn::Error::new(int.span(), "array slab fields must have a literal length")
+                })?,
+                other => {
+                    return Err(syn::Error::new(
+                        other.span(),
+                        "array slab fields must have a literal length",
+                    ))
+                }
+            };
+            Ok(FieldTy::Array {
+                elem: elem.clone(),
+                len,
+            })
+        } else {
+            Ok(FieldTy::Plain(ty.clone()))
+        }
+    }
+
+    /// The type that must implement `SlabItem`.
+    fn slab_item_ty(&self) -> &Type {
+        match self {
+            FieldTy::Plain(ty) => ty,
+            FieldTy::Array { elem, .. } => elem,
+        }
+    }
+
+    /// The const expression this field contributes to `SLAB_SIZE`.
+    fn size_expr(&self) -> proc_macro2::TokenStream {
+        let item_ty = self.slab_item_ty();
+        match self {
+            FieldTy::Plain(_) => quote! { <#item_ty as crabslab::SlabItem>::SLAB_SIZE },
+            FieldTy::Array { len, .. } => {
+                quote! { #len * <#item_ty as crabslab::SlabItem>::SLAB_SIZE }
+            }
+        }
+    }
+
+    /// Statements writing the field into `__dest`, starting at and
+    /// advancing the running index `__i`.
+    fn write_stmts(&self, access: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        let item_ty = self.slab_item_ty();
+        let dest = quote! { AsMut::<[u32]>::as_mut(&mut __dest) };
+        match self {
+            FieldTy::Plain(_) => {
+                let src = quote! { to_array(#access) };
+                field_write_stmts(item_ty, src, dest)
+            }
+            FieldTy::Array { .. } => {
+                let src = quote! { to_array(__element) };
+                let inner = field_write_stmts(item_ty, src, dest);
+                // `IntoIter::new` iterates by value in every edition (a
+                // bare `into_iter()` on arrays is edition-dependent).
+                quote! {
+                    for __element in ::core::array::IntoIter::new(#access) {
+                        #inner
+                    }
+                }
+            }
+        }
+    }
+
+    /// Statements reading the field from `__slab`, starting at and
+    /// advancing the running index `__i`, binding the value to `var`.
+    fn read_stmts(&self, var: Ident) -> proc_macro2::TokenStream {
+        let item_ty = self.slab_item_ty();
+        let slab = quote! { AsRef::<[u32]>::as_ref(&__slab) };
+        match self {
+            FieldTy::Plain(_) => {
+                let mut stmts = field_read_stmts(item_ty, slab);
+                stmts.extend(quote! { let #var = __field; });
+                stmts
+            }
+            FieldTy::Array { .. } => {
+                let inner = field_read_stmts(item_ty, slab);
+                quote! {
+                    let #var = ::core::array::from_fn(|_| {
+                        #inner
+                        __field
+                    });
+                }
+            }
+        }
+    }
+}
+
 struct FieldParams {
     field_tys: Vec<Type>,
     field_names: Vec<FieldName>,
@@ -64,11 +174,13 @@ impl FieldParams {
 
 struct StructParams {
     fields: FieldParams,
+    /// Per-field serialization classification.
+    infos: Vec<FieldTy>,
     /// A `struct Foo;` with no fields at all.
     is_unit: bool,
 }
 
-fn get_struct_params(ds: &DataStruct) -> StructParams {
+fn get_struct_params(ds: &DataStruct) -> syn::Result<StructParams> {
     let empty_punctuated = syn::punctuated::Punctuated::new();
     let (fields, is_unit) = match ds {
         DataStruct {
@@ -85,15 +197,24 @@ fn get_struct_params(ds: &DataStruct) -> StructParams {
         } => (&empty_punctuated, true),
     };
 
-    StructParams {
-        fields: FieldParams::new(fields),
+    let fields = FieldParams::new(fields);
+    let infos = fields
+        .field_tys
+        .iter()
+        .map(FieldTy::from_type)
+        .collect::<syn::Result<Vec<_>>>()?;
+    Ok(StructParams {
+        fields,
+        infos,
         is_unit,
-    }
+    })
 }
 
 struct EnumVariant {
     variant: syn::Variant,
     fields: FieldParams,
+    /// Per-field serialization classification.
+    infos: Vec<FieldTy>,
 }
 
 struct EnumParams {
@@ -102,7 +223,7 @@ struct EnumParams {
     slab_size: proc_macro2::TokenStream,
 }
 
-fn get_enum_params(de: &DataEnum) -> EnumParams {
+fn get_enum_params(de: &DataEnum) -> syn::Result<EnumParams> {
     let DataEnum {
         enum_token: _,
         brace_token: _,
@@ -118,30 +239,36 @@ fn get_enum_params(de: &DataEnum) -> EnumParams {
                 Fields::Unit => &empty_fields,
             };
             let fields = FieldParams::new(fields);
-            EnumVariant {
+            let infos = fields
+                .field_tys
+                .iter()
+                .map(FieldTy::from_type)
+                .collect::<syn::Result<Vec<_>>>()?;
+            Ok(EnumVariant {
                 variant: variant.clone(),
                 fields,
-            }
+                infos,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<syn::Result<Vec<_>>>()?;
     let slab_size_def = quote! {
         let mut __size = 0usize;
     };
     let slab_size_increments = variants
         .iter()
         .map(|variant| {
-            let tys = &variant.fields.field_tys;
-            if tys.is_empty() {
+            let size_exprs: Vec<_> = variant.infos.iter().map(|info| info.size_expr()).collect();
+            if size_exprs.is_empty() {
                 quote! {}
             } else {
                 quote! {{
-                    let __field_size = #( <#tys as crabslab::SlabItem>::SLAB_SIZE )+*;
+                    let __field_size = #( #size_exprs )+*;
                     __size += crabslab::__saturating_sub(__field_size,__size);
                 }}
             }
         })
         .collect::<Vec<_>>();
-    EnumParams {
+    Ok(EnumParams {
         slab_size: quote! {
             {
                 #slab_size_def
@@ -151,7 +278,7 @@ fn get_enum_params(de: &DataEnum) -> EnumParams {
             }
         },
         variants,
-    }
+    })
 }
 
 enum Params {
@@ -161,8 +288,8 @@ enum Params {
 
 fn get_params(input: &DeriveInput) -> syn::Result<Params> {
     match &input.data {
-        Data::Struct(ds) => Ok(Params::Struct(get_struct_params(ds))),
-        Data::Enum(de) => Ok(Params::Enum(get_enum_params(de))),
+        Data::Struct(ds) => Ok(Params::Struct(get_struct_params(ds)?)),
+        Data::Enum(de) => Ok(Params::Enum(get_enum_params(de)?)),
         _ => Err(syn::Error::new(
             input.span(),
             "deriving SlabItem does not support unions".to_string(),
@@ -326,7 +453,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
 
     let field_tys = variants
         .iter()
-        .flat_map(|v| v.fields.field_tys.clone())
+        .flat_map(|v| v.infos.iter().map(|info| info.slab_item_ty().clone()))
         .collect::<Vec<_>>();
     let mut generics = input.generics;
     {
@@ -363,18 +490,13 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
                 Fields::Unit => quote! { #name::#ident },
             };
             let field_stmts: Vec<proc_macro2::TokenStream> = variant
-                .fields
-                .field_tys
+                .infos
                 .iter()
                 .zip(field_vars.iter())
-                .map(|(ty, var)| {
-                    let src = quote! { to_array(#var) };
-                    let dest = quote! { AsMut::<[u32]>::as_mut(&mut __dest) };
-                    field_write_stmts(ty, src, dest)
-                })
+                .map(|(info, var)| info.write_stmts(quote! { #var }))
                 .collect();
             // Only declare the running index when there are fields to walk.
-            let index_decl = if variant.fields.field_tys.is_empty() {
+            let index_decl = if variant.infos.is_empty() {
                 quote! {}
             } else {
                 quote! { let mut __i: usize = 1; }
@@ -402,21 +524,13 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
                 .map(|name| name.var())
                 .collect();
             let field_stmts: Vec<proc_macro2::TokenStream> = variant
-                .fields
-                .field_tys
+                .infos
                 .iter()
                 .zip(field_vars.iter())
-                .map(|(ty, var)| {
-                    let mut stmts =
-                        field_read_stmts(ty, quote! { AsRef::<[u32]>::as_ref(&__slab) });
-                    // Bind the read field to its name.
-                    let bind = quote! { let #var = __field; };
-                    stmts.extend(bind);
-                    stmts
-                })
+                .map(|(info, var)| info.read_stmts(var.clone()))
                 .collect();
             // Only declare the running index when there are fields to walk.
-            let index_decl = if variant.fields.field_tys.is_empty() {
+            let index_decl = if variant.infos.is_empty() {
                 quote! {}
             } else {
                 quote! { let mut __i: usize = 1; }
@@ -475,9 +589,10 @@ fn derive_from_slab_struct(
 ) -> proc_macro::TokenStream {
     let StructParams {
         fields: FieldParams {
-            field_tys,
+            field_tys: _,
             field_names,
         },
+        infos,
         is_unit,
     } = params;
 
@@ -487,18 +602,21 @@ fn derive_from_slab_struct(
     let mut generics = input.generics;
     {
         let where_clause = generics.make_where_clause();
-        for ty in field_tys.iter() {
+        for info in infos.iter() {
+            let ty = info.slab_item_ty();
             let where_predicate: WherePredicate = syn::parse_quote!(#ty : crabslab::SlabItem);
             where_clause.predicates.push(where_predicate);
         }
     }
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    let n_fields = field_tys.len();
+    let n_fields = infos.len();
+    let size_exprs: Vec<proc_macro2::TokenStream> =
+        infos.iter().map(|info| info.size_expr()).collect();
     let slab_size = if n_fields == 0 {
         quote! { 0usize }
     } else {
-        quote! { #( <#field_tys as crabslab::SlabItem>::SLAB_SIZE )+* }
+        quote! { #( #size_exprs )+* }
     };
     let (array_ty, array_container) = array_items(is_generic, slab_size.clone());
 
@@ -509,10 +627,10 @@ fn derive_from_slab_struct(
         quote! { let mut __i: usize = 0; }
     };
 
-    let to_stmts: Vec<proc_macro2::TokenStream> = field_tys
+    let to_stmts: Vec<proc_macro2::TokenStream> = infos
         .iter()
         .zip(field_names.iter())
-        .map(|(ty, fname)| {
+        .map(|(info, fname)| {
             let access = match fname {
                 FieldName::Index(i) => {
                     let idx = i.index;
@@ -520,21 +638,16 @@ fn derive_from_slab_struct(
                 }
                 FieldName::Ident(f) => quote! { data.#f },
             };
-            let src = quote! { to_array(#access) };
-            let dest = quote! { AsMut::<[u32]>::as_mut(&mut __dest) };
-            field_write_stmts(ty, src, dest)
+            info.write_stmts(access)
         })
         .collect();
 
-    let from_stmts: Vec<proc_macro2::TokenStream> = field_tys
+    let from_stmts: Vec<proc_macro2::TokenStream> = infos
         .iter()
         .zip(field_names.iter())
-        .map(|(ty, fname)| {
+        .map(|(info, fname)| {
             let var = fname.var();
-            let mut stmts = field_read_stmts(ty, quote! { AsRef::<[u32]>::as_ref(&__slab) });
-            let bind = quote! { let #var = __field; };
-            stmts.extend(bind);
-            stmts
+            info.read_stmts(var)
         })
         .collect();
 
@@ -548,9 +661,9 @@ fn derive_from_slab_struct(
         quote! { #name ( #(#vars),* ) }
     };
 
-    let mut offset_tys = vec![];
+    let mut offset_size_exprs: Vec<proc_macro2::TokenStream> = vec![];
     let mut offsets = vec![];
-    for (fname, ty) in field_names.iter().zip(field_tys.iter()) {
+    for (fname, info) in field_names.iter().zip(infos.iter()) {
         let (offset_of_ident, slab_size_of_ident) = match fname {
             FieldName::Index(i) => (
                 Ident::new(&format!("OFFSET_OF_{}", i.index), i.span),
@@ -567,18 +680,23 @@ fn derive_from_slab_struct(
                 ),
             ),
         };
+        // For array fields the offset's type parameter is the element
+        // type, so adding the offset to an `Id` addresses the array's
+        // first element.
+        let offset_ty = info.slab_item_ty();
+        let field_size_expr = info.size_expr();
         offsets.push(quote! {
-            pub const #offset_of_ident: crabslab::offset::Offset<#ty, Self> = {
+            pub const #offset_of_ident: crabslab::offset::Offset<#offset_ty, Self> = {
                 crabslab::offset::Offset::new(
-                    #(<#offset_tys as crabslab::SlabItem>::SLAB_SIZE+)*
+                    #( #offset_size_exprs+)*
                     0
                 )
             };
             pub const #slab_size_of_ident: usize = {
-                <#ty as crabslab::SlabItem>::SLAB_SIZE
+                #field_size_expr
             };
         });
-        offset_tys.push(ty.clone());
+        offset_size_exprs.push(info.size_expr());
     }
 
     let offsets_output = if gen_offsets {
