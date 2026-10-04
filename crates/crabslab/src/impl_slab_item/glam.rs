@@ -1,155 +1,177 @@
+//! CPU-only `SlabItem` impls for glam types, enabled by the `glam` feature.
+//!
+//! These are plain-Rust impls outside any `#[wgsl]` module: glam types are
+//! CPU-side only. When wgsl-rs std vector/matrix impls land
+//! ([7iu.1.6](#beads/schell-7iu.1.6)) they will cover the GPU side, and these
+//! glam impls stay for downstream compatibility.
 use glam::{Mat4, Quat, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 
-use crate::{Slab, SlabItem};
+use crate::SlabItem;
 
-impl SlabItem for glam::Mat4 {
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
-        let x_axis = Vec4::read_slab(index, slab);
-        let y_axis = Vec4::read_slab(index + 4, slab);
-        let z_axis = Vec4::read_slab(index + 8, slab);
-        let w_axis = Vec4::read_slab(index + 12, slab);
-        Mat4::from_cols(x_axis, y_axis, z_axis, w_axis)
-    }
+impl SlabItem for Mat4 {
+    const SLAB_SIZE: usize = 16;
+    type Array = [u32; 16];
 
-    const SLAB_SIZE: usize = { 16 };
-
-    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        let Self {
-            x_axis,
-            y_axis,
-            z_axis,
-            w_axis,
-        } = self;
-        let index = x_axis.write_slab(index, slab);
-        let index = y_axis.write_slab(index, slab);
-        let index = z_axis.write_slab(index, slab);
-        w_axis.write_slab(index, slab)
-    }
-}
-
-impl SlabItem for glam::Vec2 {
-    const SLAB_SIZE: usize = { 2 };
-
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
-        let x = f32::read_slab(index, slab);
-        let y = f32::read_slab(index + 1, slab);
-        Vec2::new(x, y)
-    }
-
-    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        if slab.len() < index + 2 {
-            return index;
+    fn to_array(data: Self) -> Self::Array {
+        let mut dest = [0u32; 16];
+        for (i, f) in data.to_cols_array().iter().enumerate() {
+            dest[i] = f.to_bits();
         }
-        let index = self.x.write_slab(index, slab);
-        self.y.write_slab(index, slab)
+        dest
+    }
+
+    fn from_array(arr: Self::Array) -> Self {
+        let mut cols = [0f32; 16];
+        for (i, slot) in arr.iter().enumerate() {
+            cols[i] = f32::from_bits(*slot);
+        }
+        Mat4::from_cols_array(&cols)
+    }
+
+    fn array_container() -> Self::Array {
+        [0u32; 16]
     }
 }
 
-impl SlabItem for glam::Vec3 {
-    const SLAB_SIZE: usize = { 3 };
+impl SlabItem for Vec2 {
+    const SLAB_SIZE: usize = 2;
+    type Array = [u32; 2];
 
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
-        let x = f32::read_slab(index, slab);
-        let y = f32::read_slab(index + 1, slab);
-        let z = f32::read_slab(index + 2, slab);
-        Vec3::new(x, y, z)
+    fn to_array(data: Self) -> Self::Array {
+        [data.x.to_bits(), data.y.to_bits()]
     }
 
-    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        let Self { x, y, z } = self;
-        let index = x.write_slab(index, slab);
-        let index = y.write_slab(index, slab);
-        z.write_slab(index, slab)
+    fn from_array(arr: Self::Array) -> Self {
+        Vec2::new(f32::from_bits(arr[0]), f32::from_bits(arr[1]))
+    }
+
+    fn array_container() -> Self::Array {
+        [0, 0]
     }
 }
 
-impl SlabItem for glam::Vec4 {
-    const SLAB_SIZE: usize = { 4 };
+impl SlabItem for Vec3 {
+    const SLAB_SIZE: usize = 3;
+    type Array = [u32; 3];
 
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
+    fn to_array(data: Self) -> Self::Array {
+        [data.x.to_bits(), data.y.to_bits(), data.z.to_bits()]
+    }
+
+    fn from_array(arr: Self::Array) -> Self {
+        Vec3::new(
+            f32::from_bits(arr[0]),
+            f32::from_bits(arr[1]),
+            f32::from_bits(arr[2]),
+        )
+    }
+
+    fn array_container() -> Self::Array {
+        [0, 0, 0]
+    }
+}
+
+impl SlabItem for Vec4 {
+    const SLAB_SIZE: usize = 4;
+    type Array = [u32; 4];
+
+    fn to_array(data: Self) -> Self::Array {
+        [
+            data.x.to_bits(),
+            data.y.to_bits(),
+            data.z.to_bits(),
+            data.w.to_bits(),
+        ]
+    }
+
+    fn from_array(arr: Self::Array) -> Self {
         Vec4::new(
-            f32::read_slab(index, slab),
-            f32::read_slab(index + 1, slab),
-            f32::read_slab(index + 2, slab),
-            f32::read_slab(index + 3, slab),
+            f32::from_bits(arr[0]),
+            f32::from_bits(arr[1]),
+            f32::from_bits(arr[2]),
+            f32::from_bits(arr[3]),
         )
     }
 
-    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        let index = self.z.write_slab(index, slab);
-        self.w.write_slab(index, slab)
+    fn array_container() -> Self::Array {
+        [0, 0, 0, 0]
     }
 }
 
-impl SlabItem for glam::Quat {
-    const SLAB_SIZE: usize = { 4 };
+impl SlabItem for Quat {
+    const SLAB_SIZE: usize = 4;
+    type Array = [u32; 4];
 
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
+    fn to_array(data: Self) -> Self::Array {
+        [
+            data.x.to_bits(),
+            data.y.to_bits(),
+            data.z.to_bits(),
+            data.w.to_bits(),
+        ]
+    }
+
+    fn from_array(arr: Self::Array) -> Self {
         Quat::from_xyzw(
-            f32::read_slab(index, slab),
-            f32::read_slab(index + 1, slab),
-            f32::read_slab(index + 2, slab),
-            f32::read_slab(index + 3, slab),
+            f32::from_bits(arr[0]),
+            f32::from_bits(arr[1]),
+            f32::from_bits(arr[2]),
+            f32::from_bits(arr[3]),
         )
     }
 
-    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        let index = self.z.write_slab(index, slab);
-        self.w.write_slab(index, slab)
+    fn array_container() -> Self::Array {
+        [0, 0, 0, 0]
     }
 }
 
-impl SlabItem for glam::UVec2 {
-    const SLAB_SIZE: usize = { 2 };
+impl SlabItem for UVec2 {
+    const SLAB_SIZE: usize = 2;
+    type Array = [u32; 2];
 
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
-        UVec2::new(u32::read_slab(index, slab), u32::read_slab(index + 1, slab))
+    fn to_array(data: Self) -> Self::Array {
+        [data.x, data.y]
     }
 
-    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        let index = self.x.write_slab(index, slab);
-        self.y.write_slab(index, slab)
-    }
-}
-
-impl SlabItem for glam::UVec3 {
-    const SLAB_SIZE: usize = { 3 };
-
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
-        UVec3::new(
-            u32::read_slab(index, slab),
-            u32::read_slab(index + 1, slab),
-            u32::read_slab(index + 2, slab),
-        )
+    fn from_array(arr: Self::Array) -> Self {
+        UVec2::new(arr[0], arr[1])
     }
 
-    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        self.z.write_slab(index, slab)
+    fn array_container() -> Self::Array {
+        [0, 0]
     }
 }
 
-impl SlabItem for glam::UVec4 {
-    const SLAB_SIZE: usize = { 4 };
+impl SlabItem for UVec3 {
+    const SLAB_SIZE: usize = 3;
+    type Array = [u32; 3];
 
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
-        UVec4::new(
-            u32::read_slab(index, slab),
-            u32::read_slab(index + 1, slab),
-            u32::read_slab(index + 2, slab),
-            u32::read_slab(index + 3, slab),
-        )
+    fn to_array(data: Self) -> Self::Array {
+        [data.x, data.y, data.z]
     }
 
-    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        let index = self.x.write_slab(index, slab);
-        let index = self.y.write_slab(index, slab);
-        let index = self.z.write_slab(index, slab);
-        self.w.write_slab(index, slab)
+    fn from_array(arr: Self::Array) -> Self {
+        UVec3::new(arr[0], arr[1], arr[2])
+    }
+
+    fn array_container() -> Self::Array {
+        [0, 0, 0]
+    }
+}
+
+impl SlabItem for UVec4 {
+    const SLAB_SIZE: usize = 4;
+    type Array = [u32; 4];
+
+    fn to_array(data: Self) -> Self::Array {
+        [data.x, data.y, data.z, data.w]
+    }
+
+    fn from_array(arr: Self::Array) -> Self {
+        UVec4::new(arr[0], arr[1], arr[2], arr[3])
+    }
+
+    fn array_container() -> Self::Array {
+        [0, 0, 0, 0]
     }
 }

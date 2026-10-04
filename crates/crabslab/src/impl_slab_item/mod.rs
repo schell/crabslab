@@ -4,68 +4,97 @@ mod tuples;
 #[cfg(feature = "glam")]
 mod glam;
 
-use crate::{Slab, SlabItem};
+use core::marker::PhantomData;
 
-impl<T: SlabItem + Default> SlabItem for Option<T> {
+use crate::SlabItem;
+
+/// `Option<T>` is stored as a discriminant slot followed by `T`'s slots.
+///
+/// `type Array` is a `Vec<u32>` because the size depends on a generic
+/// parameter; a fixed-size array would require the unstable
+/// `generic_const_exprs` feature.
+impl<T: SlabItem> SlabItem for Option<T> {
     const SLAB_SIZE: usize = { 1 + T::SLAB_SIZE };
+    type Array = Vec<u32>;
 
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
-        let proxy = u32::read_slab(index, slab);
-        if proxy == 1 {
-            let t = T::read_slab(index + 1, slab);
-            Some(t)
+    fn to_array(data: Self) -> Self::Array {
+        let mut dest = Self::array_container();
+        if let Some(t) = data {
+            dest[0] = 1;
+            let inner = T::to_array(t);
+            dest[1..1 + T::SLAB_SIZE].copy_from_slice(inner.as_ref());
+        }
+        dest
+    }
+
+    fn from_array(arr: Self::Array) -> Self {
+        if AsRef::<[u32]>::as_ref(&arr)[0] == 1 {
+            let mut inner = T::array_container();
+            AsMut::<[u32]>::as_mut(&mut inner)
+                .copy_from_slice(&AsRef::<[u32]>::as_ref(&arr)[1..1 + T::SLAB_SIZE]);
+            Some(T::from_array(inner))
         } else {
             None
         }
     }
 
-    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        if let Some(t) = self {
-            let index = 1u32.write_slab(index, slab);
-            t.write_slab(index, slab)
-        } else {
-            let index = 0u32.write_slab(index, slab);
-            index + T::SLAB_SIZE
-        }
+    fn array_container() -> Self::Array {
+        vec![0u32; Self::SLAB_SIZE]
     }
 }
 
+/// Arrays store their elements contiguously, with no per-element padding.
+///
+/// Like `Option<T>`, `type Array` is a `Vec<u32>` because the size depends
+/// on a generic parameter (`generic_const_exprs` would allow a stack array).
 impl<T: SlabItem + Copy + Default, const N: usize> SlabItem for [T; N]
 where
     [T; N]: Default,
 {
     const SLAB_SIZE: usize = { <T as SlabItem>::SLAB_SIZE * N };
+    type Array = Vec<u32>;
 
-    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
+    fn to_array(data: Self) -> Self::Array {
+        let mut dest = Self::array_container();
+        for (i, element) in data.iter().enumerate() {
+            let inner = T::to_array(*element);
+            let offset = i * T::SLAB_SIZE;
+            dest[offset..offset + T::SLAB_SIZE].copy_from_slice(inner.as_ref());
+        }
+        dest
+    }
+
+    fn from_array(arr: Self::Array) -> Self {
         let mut array: [T; N] = Default::default();
-        for i in 0..N {
-            let j = index + i * T::SLAB_SIZE;
-            let t = T::read_slab(j, slab);
-            let a: &mut T = crate::array_index_mut(&mut array, i);
-            *a = t;
+        for (i, slot) in array.iter_mut().enumerate() {
+            let mut inner = T::array_container();
+            let offset = i * T::SLAB_SIZE;
+            AsMut::<[u32]>::as_mut(&mut inner)
+                .copy_from_slice(&AsRef::<[u32]>::as_ref(&arr)[offset..offset + T::SLAB_SIZE]);
+            *slot = T::from_array(inner);
         }
         array
     }
 
-    fn write_slab(&self, mut index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
-        for i in 0..N {
-            let n = crate::slice_index(self, i);
-            index = n.write_slab(index, slab);
-        }
-        index
+    fn array_container() -> Self::Array {
+        vec![0u32; Self::SLAB_SIZE]
     }
 }
 
-use core::marker::PhantomData;
+/// `PhantomData<T>` occupies no slab slots.
+impl<T> SlabItem for PhantomData<T> {
+    const SLAB_SIZE: usize = 0;
+    type Array = [u32; 0];
 
-impl<T: core::any::Any> SlabItem for PhantomData<T> {
-    const SLAB_SIZE: usize = { 0 };
+    fn to_array(_data: Self) -> Self::Array {
+        []
+    }
 
-    fn read_slab(_: usize, _: &(impl Slab + ?Sized)) -> Self {
+    fn from_array(_arr: Self::Array) -> Self {
         PhantomData
     }
 
-    fn write_slab(&self, index: usize, _: &mut (impl Slab + ?Sized)) -> usize {
-        index
+    fn array_container() -> Self::Array {
+        []
     }
 }
