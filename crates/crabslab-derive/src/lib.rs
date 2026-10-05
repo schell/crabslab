@@ -13,7 +13,7 @@
 use quote::quote;
 use syn::{
     spanned::Spanned, Data, DataEnum, DataStruct, DeriveInput, Fields, FieldsNamed, FieldsUnnamed,
-    Ident, Index, Type, TypeTuple, WherePredicate,
+    Ident, Index, Type, WherePredicate,
 };
 
 enum FieldName {
@@ -633,7 +633,10 @@ fn derive_from_slab_struct(
         .map(|(info, fname)| {
             let access = match fname {
                 FieldName::Index(i) => {
-                    let idx = i.index;
+                    // `syn::Index` interpolates as bare digits; a `u32`
+                    // would interpolate as `0u32`, which is invalid in
+                    // tuple index position.
+                    let idx = syn::Index::from(i.index as usize);
                     quote! { data.#idx }
                 }
                 FieldName::Ident(f) => quote! { data.#f },
@@ -737,76 +740,6 @@ fn derive_from_slab_struct(
             }
         }
         #offsets_output
-    };
-    output.into()
-}
-
-#[proc_macro]
-pub fn impl_slabitem_tuples(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let tuple: TypeTuple = syn::parse_macro_input!(input);
-    let tys = tuple.elems.iter().collect::<Vec<_>>();
-    let indices = tys
-        .iter()
-        .enumerate()
-        .map(|(i, _)| Index::from(i))
-        .collect::<Vec<_>>();
-
-    // Tuples are generic over their element types, so `type Array` cannot
-    // be a fixed-size array on stable Rust (`generic_const_exprs`) — use
-    // the `Vec<u32>` escape hatch.
-    let to_stmts: Vec<proc_macro2::TokenStream> = tys
-        .iter()
-        .zip(indices.iter())
-        .map(|(ty, index)| {
-            let src = quote! { to_array(data.#index) };
-            let dest = quote! { AsMut::<[u32]>::as_mut(&mut __dest) };
-            field_write_stmts(ty, src, dest)
-        })
-        .collect();
-    let from_vars: Vec<Ident> = tys
-        .iter()
-        .enumerate()
-        .map(|(i, ty)| Ident::new(&format!("__{i}"), ty.span()))
-        .collect();
-    let from_stmts: Vec<proc_macro2::TokenStream> = tys
-        .iter()
-        .zip(from_vars.iter())
-        .map(|(ty, var)| {
-            let mut stmts = field_read_stmts(ty, quote! { AsRef::<[u32]>::as_ref(&__slab) });
-            let bind = quote! { let #var = __field; };
-            stmts.extend(bind);
-            stmts
-        })
-        .collect();
-
-    let output = quote! {
-        impl<#(#tys),*> crabslab::SlabItem for #tuple
-        where
-            #(#tys: crabslab::SlabItem),*,
-        {
-            const SLAB_SIZE: usize = {
-                #( <#tys as crabslab::SlabItem>::SLAB_SIZE )+*
-            };
-
-            type Array = Vec<u32>;
-
-            fn array_container() -> Self::Array {
-                vec![0u32; Self::SLAB_SIZE]
-            }
-
-            fn to_array(data: Self) -> Self::Array {
-                let mut __dest = Self::array_container();
-                let mut __i: usize = 0;
-                #(#to_stmts)*
-                __dest
-            }
-
-            fn from_array(__slab: Self::Array) -> Self {
-                let mut __i: usize = 0;
-                #(#from_stmts)*
-                (#(#from_vars,)*)
-            }
-        }
     };
     output.into()
 }

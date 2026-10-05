@@ -539,16 +539,43 @@ mod test {
     }
 
     #[test]
-    fn tuples_and_all_primitives() {
+    fn all_primitives() {
+        #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+        struct Primitives {
+            i8_: i8,
+            u8_: u8,
+            i16_: i16,
+            u16_: u16,
+            i32_: i32,
+            u32_: u32,
+            i64_: i64,
+            u64_: u64,
+            i128_: i128,
+            u128_: u128,
+            flag: bool,
+            f32_: f32,
+            f64_: f64,
+        }
+
+        let value = Primitives {
+            i8_: -5,
+            u8_: 5,
+            i16_: -5,
+            u16_: 5,
+            i32_: -5,
+            u32_: 5,
+            i64_: -5,
+            u64_: 5,
+            i128_: -5,
+            u128_: 5,
+            flag: false,
+            f32_: 1.0,
+            f64_: 1.0,
+        };
+
         let mut slab = CpuSlab::new(vec![]);
-        let buffer1 = (-5_i8, 5u8, -5_i16, 5u16, -5_i32, 5u32);
-        let buffer2 = (-5_i64, 5u64, -5_i128, 5u128, false, 1.0_f32, 1.0_f64);
-
-        let id1 = slab.append(&buffer1);
-        let id2 = slab.append(&buffer2);
-
-        assert_eq!(buffer1, slab.read(id1));
-        assert_eq!(buffer2, slab.read(id2));
+        let id = slab.append(&value);
+        assert_eq!(value, slab.read(id));
     }
 }
 
@@ -593,13 +620,19 @@ mod blah {
 
     #[test]
     fn contains_sanity() {
+        #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+        struct Triple(u32, u32, u32);
+
+        #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+        struct Quad(u32, u32, u32, u32);
+
         let slab = CpuSlab::new(vec![0u32, 1u32, 2u32]);
         assert!(slab.contains(Id::<u32>::new(0)));
         assert!(slab.contains(Id::<u32>::new(1)));
         assert!(slab.contains(Id::<u32>::new(2)));
         assert!(!slab.contains(Id::<u32>::new(3)));
-        assert!(slab.contains(Id::<(u32, u32, u32)>::new(0)));
-        assert!(!slab.contains(Id::<(u32, u32, u32)>::new(1)));
-        assert!(!slab.contains(Id::<(u32, u32, u32, u32)>::new(0)));
+        assert!(slab.contains(Id::<Triple>::new(0)));
+        assert!(!slab.contains(Id::<Triple>::new(1)));
+        assert!(!slab.contains(Id::<Quad>::new(0)));
     }
 }
