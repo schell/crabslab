@@ -17,9 +17,12 @@ pub mod slab_item;
 pub use array::*;
 pub use id::*;
 pub use slab::*;
-pub use slab_item::SlabItem;
+pub use slab_item::slab::SlabItem;
 
 pub use crabslab_derive::SlabItem;
+
+#[macro_use]
+mod slab_macros;
 
 pub mod wgsl_impl;
 
