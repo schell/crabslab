@@ -31,6 +31,28 @@ pub mod slab {
         pub tags: [u32; 3],
     }
 
+    /// The innermost of the three-level nesting chain
+    /// `Deep → Middle → Leaf`.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
+    pub struct Leaf {
+        pub value: f32,
+    }
+
+    /// The middle level: recursion through `Leaf`'s generated methods.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
+    pub struct Middle {
+        pub id: u32,
+        pub leaf: Leaf,
+    }
+
+    /// The outermost of the three-level chain: recursion through
+    /// `Middle`'s generated methods, which recurse through `Leaf`'s.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
+    pub struct Deep {
+        pub tag: u32,
+        pub middle: Middle,
+    }
+
     storage!(group(0), binding(0), read_write, SLAB: RuntimeArray<u32>);
 
     #[compute]
@@ -58,12 +80,33 @@ pub mod slab {
     }
 }
 
+/// A module that serializes a slab struct IMPORTED from another module
+/// — verifying the cross-module constraint (hw9.3): the generated
+/// `Wrapper__1SLAB_SIZE` and `Wrapper__1to_array` reference
+/// `Deep__1SLAB_SIZE` / `Deep__1to_array`, which only exist in the
+/// assembled WGSL because the defining module (`slab`) also runs
+/// `SlabItemExt`. See the extension's module docs.
+#[wgsl(extensions = [crate::SlabItemExt])]
+pub mod cross_module {
+    use crate::slab_item::*;
+    use crate::wgsl_impl::slab::*;
+    use wgsl_rs::std::*;
+
+    /// Wraps the three-level `Deep` chain from the experiment module.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
+    pub struct Wrapper {
+        pub serial: u32,
+        pub deep: Deep,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod test {
+    use super::cross_module;
     use super::slab::*;
     use crate::{CpuSlab, GrowableSlab, Slab, SlabItem};
 
@@ -73,6 +116,9 @@ mod test {
     fn derived_slab_sizes() {
         assert_eq!(2, Bar::SLAB_SIZE);
         assert_eq!(1 + 2 + 3, Foo::SLAB_SIZE);
+        assert_eq!(1, Leaf::SLAB_SIZE);
+        assert_eq!(2, Middle::SLAB_SIZE);
+        assert_eq!(3, Deep::SLAB_SIZE);
         assert_eq!([0u32; 2], Bar::array_container());
         assert_eq!([0u32; 6], Foo::array_container());
     }
@@ -92,6 +138,42 @@ mod test {
         let mut slab = CpuSlab::new(vec![]);
         let id = slab.append(&foo);
         assert_eq!(foo, slab.read(id));
+    }
+
+    /// Three levels of nesting round-trip on the CPU — the same shape
+    /// the extension recurses through on the GPU.
+    #[test]
+    fn derived_deep_round_trip() {
+        let deep = Deep {
+            tag: 3,
+            middle: Middle {
+                id: 99,
+                leaf: Leaf { value: -2.5 },
+            },
+        };
+        let mut slab = CpuSlab::new(vec![]);
+        let id = slab.append(&deep);
+        assert_eq!(deep, slab.read(id));
+    }
+
+    /// The cross-module `Wrapper` round-trips on the CPU; its derive
+    /// references `Deep`'s trait impl, which lives in the other
+    /// module.
+    #[test]
+    fn derived_cross_module_round_trip() {
+        let wrapper = cross_module::Wrapper {
+            serial: 11,
+            deep: Deep {
+                tag: 4,
+                middle: Middle {
+                    id: 12,
+                    leaf: Leaf { value: 0.25 },
+                },
+            },
+        };
+        let mut slab = CpuSlab::new(vec![]);
+        let id = slab.append(&wrapper);
+        assert_eq!(wrapper, slab.read(id));
     }
 
     /// The dual-world macros round-trip the derived structs through a
@@ -197,6 +279,40 @@ mod test {
             "expected nested Bar__1from_array call, got:\n{source}"
         );
 
+        // Three levels of nesting: each const-sum references the next
+        // level's mangled const, and the walks recurse level by level.
+        // A single-field struct's SLAB_SIZE is the bare TypePath.
+        assert!(
+            source.contains("const Leaf__1SLAB_SIZE: u32 = f32__1SLAB_SIZE;"),
+            "expected Leaf__1SLAB_SIZE TypePath form, got:\n{source}"
+        );
+        assert!(
+            source
+                .contains("const Middle__1SLAB_SIZE: u32 = (u32__1SLAB_SIZE + Leaf__1SLAB_SIZE);"),
+            "expected Middle__1SLAB_SIZE const-sum, got:\n{source}"
+        );
+        assert!(
+            source
+                .contains("const Deep__1SLAB_SIZE: u32 = (u32__1SLAB_SIZE + Middle__1SLAB_SIZE);"),
+            "expected Deep__1SLAB_SIZE const-sum, got:\n{source}"
+        );
+        assert!(
+            source.contains("let leaf_slab = Leaf__1to_array(data.leaf);"),
+            "expected Middle -> Leaf to_array recursion, got:\n{source}"
+        );
+        assert!(
+            source.contains("let middle_slab = Middle__1to_array(data.middle);"),
+            "expected Deep -> Middle to_array recursion, got:\n{source}"
+        );
+        assert!(
+            source.contains("let leaf = Leaf__1from_array(leaf_array);"),
+            "expected Middle -> Leaf from_array recursion, got:\n{source}"
+        );
+        assert!(
+            source.contains("let middle = Middle__1from_array(middle_array);"),
+            "expected Deep -> Middle from_array recursion, got:\n{source}"
+        );
+
         // Array fields unroll one to_array/from_array pair per element.
         assert!(
             source.contains("let tags_slab_0 = u32__1to_array(data.tags[0u]);"),
@@ -230,6 +346,48 @@ mod test {
         assert!(
             !source.contains("slab_write!"),
             "slab_write! should have been lowered, got:\n{source}"
+        );
+    }
+
+    /// The cross-module module's generated impl references the IMPORTED
+    /// struct's mangled methods (`Deep__1SLAB_SIZE`, `Deep__1to_array`),
+    /// which exist in the assembled WGSL because the imported module
+    /// also runs `SlabItemExt` — the hw9.3 constraint, verified
+    /// end-to-end (the module's own `__validate_wgsl` naga check covers
+    /// the assembled source).
+    #[test]
+    fn generates_cross_module_wgsl() {
+        let source = cross_module::WGSL_SOURCE.wgsl_source().unwrap();
+        eprintln!("{source}");
+
+        assert!(
+            source
+                .contains("const Wrapper__1SLAB_SIZE: u32 = (u32__1SLAB_SIZE + Deep__1SLAB_SIZE);"),
+            "expected Wrapper__1SLAB_SIZE const-sum, got:\n{source}"
+        );
+        assert!(
+            source.contains("let deep_slab = Deep__1to_array(data.deep);"),
+            "expected Wrapper -> Deep to_array recursion, got:\n{source}"
+        );
+        assert!(
+            source.contains("let deep = Deep__1from_array(deep_array);"),
+            "expected Wrapper -> Deep from_array recursion, got:\n{source}"
+        );
+        // The referenced methods come from the imported module's
+        // source, not this module's.
+        assert!(
+            source.contains("fn Deep__1to_array("),
+            "expected imported Deep__1to_array to assemble in, got:\n{source}"
+        );
+        assert!(
+            source
+                .contains("const Deep__1SLAB_SIZE: u32 = (u32__1SLAB_SIZE + Middle__1SLAB_SIZE);"),
+            "expected imported Deep__1SLAB_SIZE to assemble in, got:\n{source}"
+        );
+        // Imported transitively through Deep: the primitives.
+        assert!(
+            source.contains("fn u32__1to_array("),
+            "expected transitive primitive import, got:\n{source}"
         );
     }
 }
