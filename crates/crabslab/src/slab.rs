@@ -1,18 +1,21 @@
 //! Slab traits.
 use core::default::Default;
-pub use crabslab_derive::SlabItem;
 
+pub use crate::SlabItem;
 use crate::{array::Array, id::Id};
 
-/// Determines the "size" of a type when stored in a slab of `&[u32]`,
-/// and how to read/write it from/to the slab.
+/// CPU-side slab I/O for [`SlabItem`]s (the A' decision from
+/// [7iu.1.9](#beads/schell-7iu.1.9)).
 ///
-/// `SlabItem` can be automatically derived for struct and tuple types,
-/// so long as those types' fields implement `SlabItem`.
-pub trait SlabItem: core::any::Any + Sized {
-    /// The number of `u32`s this type occupies in a slab of `&[u32]`.
-    const SLAB_SIZE: usize;
-
+/// The transpiled [`SlabItem`] trait stays minimal so it can live inside a
+/// `#[wgsl]` module; whole-value slab reads and writes live here instead,
+/// provided by a single blanket impl for every `SlabItem + Clone`. (`Clone`
+/// is required because [`SlabItem::to_array`] takes the value by value —
+/// WGSL has no references.)
+///
+/// Consumers keep method-call syntax: import this trait and `T: SlabItem`
+/// bounds mechanically satisfy it.
+pub trait CpuSlabItem: SlabItem + Clone {
     /// Read the type out of the slab at `index`.
     fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self;
 
@@ -23,14 +26,27 @@ pub trait SlabItem: core::any::Any + Sized {
     /// to `index`.
     fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize;
 
-    #[cfg(not(target_arch = "spirv"))]
     /// Return a vector copy of this value's slab data.
-    ///
-    /// Only available on CPU.
     fn slab_data(&self) -> Vec<u32> {
-        let mut data = vec![0u32; Self::SLAB_SIZE];
-        self.write_slab(0, &mut data);
-        data
+        Self::to_array(self.clone()).as_ref().to_vec()
+    }
+}
+
+impl<T: SlabItem + Clone> CpuSlabItem for T {
+    fn read_slab(index: usize, slab: &(impl Slab + ?Sized)) -> Self {
+        let mut arr = Self::array_container();
+        for (i, slot) in AsMut::<[u32]>::as_mut(&mut arr).iter_mut().enumerate() {
+            *slot = slab.read_at(index + i);
+        }
+        Self::from_array(arr)
+    }
+
+    fn write_slab(&self, index: usize, slab: &mut (impl Slab + ?Sized)) -> usize {
+        let arr = Self::to_array(self.clone());
+        for (i, element) in AsRef::<[u32]>::as_ref(&arr).iter().enumerate() {
+            slab.write_at(index + i, *element);
+        }
+        index + Self::SLAB_SIZE
     }
 }
 
@@ -49,14 +65,15 @@ pub trait Slab {
         self.len() == 0
     }
 
-    /// Returns `true` if the slab size is great enough to contain the value with the given id.
+    /// Returns `true` if the slab size is great enough to contain the value
+    /// with the given id.
     fn contains<T: SlabItem>(&self, id: Id<T>) -> bool {
         self.len() >= T::SLAB_SIZE && id.index() <= self.len() - T::SLAB_SIZE
     }
 
     /// Read the type from the slab using the [`Id`] as the index, or return
     /// the default if `id` is `Id::NONE`.
-    fn read<T: SlabItem + Default>(&self, id: Id<T>) -> T {
+    fn read<T: SlabItem + Default + Clone>(&self, id: Id<T>) -> T {
         if self.contains(id) {
             self.read_unchecked(id)
         } else {
@@ -65,16 +82,15 @@ pub trait Slab {
     }
 
     /// Read the type from the slab using the [`Id`] as the index.
-    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T;
+    fn read_unchecked<T: SlabItem + Clone>(&self, id: Id<T>) -> T;
 
-    fn read_into_if_some<T: SlabItem>(&self, id: Id<T>, t: &mut T) {
+    fn read_into_if_some<T: SlabItem + Clone>(&self, id: Id<T>, t: &mut T) {
         if id.is_some() {
             *t = self.read_unchecked(id);
         }
     }
 
-    #[cfg(not(target_arch = "spirv"))]
-    fn read_vec<T: SlabItem + Default>(&self, array: crate::array::Array<T>) -> Vec<T> {
+    fn read_vec<T: SlabItem + Default + Clone>(&self, array: crate::array::Array<T>) -> Vec<T> {
         let mut vec = Vec::with_capacity(array.len());
         for i in 0..array.len() {
             let id = array.at(i);
@@ -87,18 +103,18 @@ pub trait Slab {
     ///
     /// Return the next index, or the same index if writing would overlap the
     /// slab.
-    fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize;
+    fn write_indexed<T: SlabItem + Clone>(&mut self, t: &T, index: usize) -> usize;
 
     /// Write a slice of the type into the slab at the index.
     ///
     /// Return the next index, or the same index if writing would overlap the
     /// slab.
-    fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize;
+    fn write_indexed_slice<T: SlabItem + Clone>(&mut self, t: &[T], index: usize) -> usize;
 
     /// Write the type into the slab at the position of the given `Id`.
     ///
     /// This likely performs a partial write if the given `Id` is out of bounds.
-    fn write<T: SlabItem>(&mut self, id: Id<T>, t: &T) {
+    fn write<T: SlabItem + Clone>(&mut self, id: Id<T>, t: &T) {
         let _ = self.write_indexed(t, id.index());
     }
 
@@ -108,7 +124,7 @@ pub trait Slab {
     /// ## NOTE
     /// This does nothing if the length of `Array` is greater than the length of
     /// `data`.
-    fn write_array<T: SlabItem>(&mut self, array: Array<T>, data: &[T]) {
+    fn write_array<T: SlabItem + Clone>(&mut self, array: Array<T>, data: &[T]) {
         if array.len() > data.len() {
             return;
         }
@@ -123,37 +139,23 @@ impl Slab for [u32] {
 
     #[inline]
     fn read_at(&self, index: usize) -> u32 {
-        #[cfg(not(target_arch = "spirv"))]
-        {
-            self[index]
-        }
-        #[cfg(target_arch = "spirv")]
-        {
-            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked(self, index) }
-        }
+        self[index]
     }
 
     #[inline]
     fn write_at(&mut self, index: usize, element: u32) {
-        #[cfg(not(target_arch = "spirv"))]
-        {
-            self[index] = element;
-        }
-        #[cfg(target_arch = "spirv")]
-        {
-            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked_mut(self, index) = element };
-        }
+        self[index] = element;
     }
 
-    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
+    fn read_unchecked<T: SlabItem + Clone>(&self, id: Id<T>) -> T {
         T::read_slab(id.0 as usize, self)
     }
 
-    fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
+    fn write_indexed<T: SlabItem + Clone>(&mut self, t: &T, index: usize) -> usize {
         t.write_slab(index, self)
     }
 
-    fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
+    fn write_indexed_slice<T: SlabItem + Clone>(&mut self, t: &[T], index: usize) -> usize {
         let mut index = index;
         for item in t {
             index = item.write_slab(index, self);
@@ -167,15 +169,15 @@ impl<const N: usize> Slab for [u32; N] {
         N
     }
 
-    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
+    fn read_unchecked<T: SlabItem + Clone>(&self, id: Id<T>) -> T {
         T::read_slab(id.0 as usize, self)
     }
 
-    fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
+    fn write_indexed<T: SlabItem + Clone>(&mut self, t: &T, index: usize) -> usize {
         t.write_slab(index, self)
     }
 
-    fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
+    fn write_indexed_slice<T: SlabItem + Clone>(&mut self, t: &[T], index: usize) -> usize {
         let mut index = index;
         for item in t {
             index = item.write_slab(index, self);
@@ -185,69 +187,40 @@ impl<const N: usize> Slab for [u32; N] {
 
     #[inline]
     fn read_at(&self, index: usize) -> u32 {
-        #[cfg(not(target_arch = "spirv"))]
-        {
-            self[index]
-        }
-        #[cfg(target_arch = "spirv")]
-        {
-            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked(self, index) }
-        }
+        self[index]
     }
 
     #[inline]
     fn write_at(&mut self, index: usize, element: u32) {
-        #[cfg(not(target_arch = "spirv"))]
-        {
-            self[index] = element;
-        }
-        #[cfg(target_arch = "spirv")]
-        {
-            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked_mut(self, index) = element };
-        }
+        self[index] = element;
     }
 }
 
-#[cfg(not(target_arch = "spirv"))]
 impl Slab for Vec<u32> {
     fn len(&self) -> usize {
         self.len()
     }
 
-    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
+    fn read_unchecked<T: SlabItem + Clone>(&self, id: Id<T>) -> T {
         self.as_slice().read_unchecked(id)
     }
 
-    fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
+    fn write_indexed<T: SlabItem + Clone>(&mut self, t: &T, index: usize) -> usize {
         self.as_mut_slice().write_indexed(t, index)
     }
 
-    fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
+    fn write_indexed_slice<T: SlabItem + Clone>(&mut self, t: &[T], index: usize) -> usize {
         self.as_mut_slice().write_indexed_slice(t, index)
     }
 
     #[inline]
     fn read_at(&self, index: usize) -> u32 {
-        #[cfg(not(target_arch = "spirv"))]
-        {
-            self[index]
-        }
-        #[cfg(target_arch = "spirv")]
-        {
-            unsafe { spirv_std::arch::IndexUnchecked::index_unchecked(slab, index) }
-        }
+        self[index]
     }
 
     #[inline]
     fn write_at(&mut self, index: usize, element: u32) {
-        #[cfg(not(target_arch = "spirv"))]
-        {
-            self[index] = element;
-        }
-        #[cfg(target_arch = "spirv")]
-        {
-            unsafe { *spirv_std::arch::IndexUnchecked::index_unchecked_mut(slab, index) = element };
-        }
+        self[index] = element;
     }
 }
 
@@ -313,7 +286,7 @@ pub trait GrowableSlab: Slab {
     /// Append to the end of the buffer.
     ///
     /// Returns the `Id` of the written element.
-    fn append<T: SlabItem>(&mut self, t: &T) -> Id<T> {
+    fn append<T: SlabItem + Clone>(&mut self, t: &T) -> Id<T> {
         let id = self.allocate::<T>();
         // IGNORED: safe because we just allocated the id
         self.write(id, t);
@@ -324,7 +297,7 @@ pub trait GrowableSlab: Slab {
     /// and returning a slabbed array.
     ///
     /// Returns the `Array` of the written elements.
-    fn append_array<T: SlabItem>(&mut self, ts: &[T]) -> Array<T> {
+    fn append_array<T: SlabItem + Clone>(&mut self, ts: &[T]) -> Array<T> {
         let array = self.allocate_array::<T>(ts.len());
         // IGNORED: safe because we just allocated the array
         self.write_array(array, ts);
@@ -360,15 +333,15 @@ impl<B: Slab> Slab for CpuSlab<B> {
         self.slab.len()
     }
 
-    fn read_unchecked<T: SlabItem>(&self, id: Id<T>) -> T {
+    fn read_unchecked<T: SlabItem + Clone>(&self, id: Id<T>) -> T {
         self.slab.read_unchecked(id)
     }
 
-    fn write_indexed<T: SlabItem>(&mut self, t: &T, index: usize) -> usize {
+    fn write_indexed<T: SlabItem + Clone>(&mut self, t: &T, index: usize) -> usize {
         self.slab.write_indexed(t, index)
     }
 
-    fn write_indexed_slice<T: SlabItem>(&mut self, t: &[T], index: usize) -> usize {
+    fn write_indexed_slice<T: SlabItem + Clone>(&mut self, t: &[T], index: usize) -> usize {
         self.slab.write_indexed_slice(t, index)
     }
 
@@ -409,7 +382,6 @@ impl<B: GrowableSlab> CpuSlab<B> {
     }
 }
 
-#[cfg(not(target_arch = "spirv"))]
 impl GrowableSlab for Vec<u32> {
     fn capacity(&self) -> usize {
         Vec::capacity(self)
@@ -434,7 +406,7 @@ mod test {
 
     use super::*;
 
-    #[derive(Debug, Default, PartialEq, SlabItem)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
     struct Vertex {
         position: Vec4,
         color: Vec4,
@@ -442,26 +414,58 @@ mod test {
     }
 
     #[test]
+    fn derived_array_field_round_trip() {
+        #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+        struct WithArray {
+            id: u32,
+            weights: [f32; 4],
+            tag: [u32; 2],
+        }
+
+        // Array fields are walked element-wise, not as slab items.
+        assert_eq!(7, WithArray::SLAB_SIZE);
+
+        let value = WithArray {
+            id: 7,
+            weights: [1.0, -2.5, 3.0, 4.0],
+            tag: [8, 9],
+        };
+        let mut slab = CpuSlab::new(vec![]);
+        let id = slab.append(&value);
+        assert_eq!(value, slab.read(id));
+
+        // Verify the wire format: elements packed contiguously after the
+        // scalar field, with no padding.
+        let raw = slab.as_ref();
+        assert_eq!(7, raw[0]);
+        assert_eq!(1.0f32.to_bits(), raw[1]);
+        assert_eq!((-2.5f32).to_bits(), raw[2]);
+        assert_eq!(8, raw[5]);
+        assert_eq!(9, raw[6]);
+    }
+
+    #[test]
     fn slab_array_readwrite() {
         let mut slab = [0u32; 16];
         slab.write_indexed(&42, 0);
         slab.write_indexed(&666, 1);
-        let t = slab.read(Id::<[u32; 2]>::new(0));
-        assert_eq!([42, 666], t);
         let t: Vec<u32> = slab.read_vec(Array::new(Id::ZERO, 2));
         assert_eq!([42, 666], t[..]);
         slab.write_indexed_slice(&[1, 2, 3, 4], 2);
         let t: Vec<u32> = slab.read_vec(Array::new(Id::new(2), 4));
         assert_eq!([1, 2, 3, 4], t[..]);
 
-        // use _f32 explicit, otherwise it fails
-        slab.write_indexed_slice(&[[1.0_f32, 2.0, 3.0, 4.0], [5.5, 6.5, 7.5, 8.5]], 0);
+        // Fixed-size arrays are not slab items; write and read their
+        // elements.
+        let floats = [1.0_f32, 2.0, 3.0, 4.0, 5.5, 6.5, 7.5, 8.5];
+        slab.write_indexed_slice(&floats, 0);
 
-        let arr = Array::<[f32; 4]>::new(Id::ZERO, 2);
+        let arr = Array::<f32>::new(Id::ZERO, 8);
         assert_eq!(Id::new(0), arr.at(0));
-        assert_eq!(Id::new(4), arr.at(1));
-        assert_eq!([1.0, 2.0, 3.0, 4.0], slab.read(arr.at(0)));
-        assert_eq!([5.5, 6.5, 7.5, 8.5], slab.read(arr.at(1)));
+        assert_eq!(Id::new(7), arr.at(7));
+        assert_eq!(1.0, slab.read(arr.at(0)));
+        assert_eq!(4.0, slab.read(arr.at(3)));
+        assert_eq!(8.5, slab.read(arr.at(7)));
 
         let geometry = vec![
             Vertex {
@@ -535,16 +539,43 @@ mod test {
     }
 
     #[test]
-    fn tuples_and_all_primitives() {
+    fn all_primitives() {
+        #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+        struct Primitives {
+            i8_: i8,
+            u8_: u8,
+            i16_: i16,
+            u16_: u16,
+            i32_: i32,
+            u32_: u32,
+            i64_: i64,
+            u64_: u64,
+            i128_: i128,
+            u128_: u128,
+            flag: bool,
+            f32_: f32,
+            f64_: f64,
+        }
+
+        let value = Primitives {
+            i8_: -5,
+            u8_: 5,
+            i16_: -5,
+            u16_: 5,
+            i32_: -5,
+            u32_: 5,
+            i64_: -5,
+            u64_: 5,
+            i128_: -5,
+            u128_: 5,
+            flag: false,
+            f32_: 1.0,
+            f64_: 1.0,
+        };
+
         let mut slab = CpuSlab::new(vec![]);
-        let buffer1 = (-5_i8, 5u8, -5_i16, 5u16, -5_i32, 5u32);
-        let buffer2 = (-5_i64, 5u64, -5_i128, 5u128, false, 1.0_f32, 1.0_f64);
-
-        let id1 = slab.append(&buffer1);
-        let id2 = slab.append(&buffer2);
-
-        assert_eq!(buffer1, slab.read(id1));
-        assert_eq!(buffer2, slab.read(id2));
+        let id = slab.append(&value);
+        assert_eq!(value, slab.read(id));
     }
 }
 
@@ -555,12 +586,12 @@ mod blah {
 
     #[test]
     fn derive_baz_sanity() {
-        #[derive(Debug, Default, PartialEq, SlabItem)]
+        #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
         pub struct Bar {
             a: u32,
         }
 
-        #[derive(Debug, Default, PartialEq, SlabItem)]
+        #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
         enum Baz {
             #[default]
             One,
@@ -589,13 +620,19 @@ mod blah {
 
     #[test]
     fn contains_sanity() {
+        #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+        struct Triple(u32, u32, u32);
+
+        #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+        struct Quad(u32, u32, u32, u32);
+
         let slab = CpuSlab::new(vec![0u32, 1u32, 2u32]);
         assert!(slab.contains(Id::<u32>::new(0)));
         assert!(slab.contains(Id::<u32>::new(1)));
         assert!(slab.contains(Id::<u32>::new(2)));
         assert!(!slab.contains(Id::<u32>::new(3)));
-        assert!(slab.contains(Id::<(u32, u32, u32)>::new(0)));
-        assert!(!slab.contains(Id::<(u32, u32, u32)>::new(1)));
-        assert!(!slab.contains(Id::<(u32, u32, u32, u32)>::new(0)));
+        assert!(slab.contains(Id::<Triple>::new(0)));
+        assert!(!slab.contains(Id::<Triple>::new(1)));
+        assert!(!slab.contains(Id::<Quad>::new(0)));
     }
 }
