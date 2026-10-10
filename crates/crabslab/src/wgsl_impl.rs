@@ -53,6 +53,24 @@ pub mod slab {
         pub middle: Middle,
     }
 
+    /// A fieldless enum — the extension serializes unit-variant enums
+    /// as their variant position in one slot.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
+    #[repr(u32)]
+    pub enum Kind {
+        #[default]
+        Alpha,
+        Beta,
+    }
+
+    /// A struct with an enum field: `Kind__1SLAB_SIZE` contributes to
+    /// the const-sum like any other slab item type.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
+    pub struct Tagged {
+        pub kind: Kind,
+        pub weight: u32,
+    }
+
     storage!(group(0), binding(0), read_write, SLAB: RuntimeArray<u32>);
 
     #[compute]
@@ -119,6 +137,8 @@ mod test {
         assert_eq!(1, Leaf::SLAB_SIZE);
         assert_eq!(2, Middle::SLAB_SIZE);
         assert_eq!(3, Deep::SLAB_SIZE);
+        assert_eq!(1, Kind::SLAB_SIZE);
+        assert_eq!(2, Tagged::SLAB_SIZE);
         assert_eq!([0u32; 2], Bar::array_container());
         assert_eq!([0u32; 6], Foo::array_container());
     }
@@ -174,6 +194,23 @@ mod test {
         let mut slab = CpuSlab::new(vec![]);
         let id = slab.append(&wrapper);
         assert_eq!(wrapper, slab.read(id));
+    }
+
+    /// A fieldless enum serializes as one slot (its variant position)
+    /// in both worlds, including as a struct field.
+    #[test]
+    fn derived_enum_round_trip() {
+        let tagged = Tagged {
+            kind: Kind::Beta,
+            weight: 9,
+        };
+        let mut slab = CpuSlab::new(vec![]);
+        let id = slab.append(&tagged);
+        assert_eq!(tagged, slab.read(id));
+
+        // The wire form is the variant position.
+        let raw = slab.as_ref();
+        assert_eq!([1u32, 9], [raw[0], raw[1]]);
     }
 
     /// The dual-world macros round-trip the derived structs through a
@@ -311,6 +348,26 @@ mod test {
         assert!(
             source.contains("let middle = Middle__1from_array(middle_array);"),
             "expected Deep -> Middle from_array recursion, got:\n{source}"
+        );
+
+        // Fieldless enums serialize their variant position in one slot,
+        // and enum-typed struct fields take the generic TypePath path.
+        assert!(
+            source.contains("const Kind__1SLAB_SIZE: u32 = 1u;"),
+            "expected Kind__1SLAB_SIZE, got:\n{source}"
+        );
+        assert!(
+            source
+                .contains("const Tagged__1SLAB_SIZE: u32 = (Kind__1SLAB_SIZE + u32__1SLAB_SIZE);"),
+            "expected Tagged__1SLAB_SIZE const-sum, got:\n{source}"
+        );
+        assert!(
+            source.contains("let kind_slab = Kind__1to_array(data.kind);"),
+            "expected Tagged -> Kind to_array call, got:\n{source}"
+        );
+        assert!(
+            source.contains("let kind = Kind__1from_array(kind_array);"),
+            "expected Tagged -> Kind from_array call, got:\n{source}"
         );
 
         // Array fields unroll one to_array/from_array pair per element.

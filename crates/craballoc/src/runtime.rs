@@ -229,7 +229,7 @@ impl IsRuntime for WgpuRuntime {
             })
         });
 
-        let submission_index = tracing::trace_span!("copy_buffer").in_scope(|| {
+        let _submission_index = tracing::trace_span!("copy_buffer").in_scope(|| {
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -250,7 +250,7 @@ impl IsRuntime for WgpuRuntime {
         });
         tracing::trace_span!("poll").in_scope(|| {
             self.device
-                .poll(wgpu::PollType::WaitForSubmissionIndex(submission_index))
+                .poll(wgpu::PollType::wait_indefinitely())
                 .context(PollSnafu)
         })?;
         rx.recv()
