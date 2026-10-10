@@ -12,6 +12,7 @@ mod slab;
 pub mod bits;
 pub mod impl_slab_item;
 pub mod offset;
+#[macro_use]
 pub mod slab_item;
 
 pub use array::*;
@@ -20,9 +21,6 @@ pub use slab::*;
 pub use slab_item::slab::SlabItem;
 
 pub use crabslab_derive::SlabItem;
-
-#[macro_use]
-mod slab_macros;
 
 pub mod wgsl_impl;
 
