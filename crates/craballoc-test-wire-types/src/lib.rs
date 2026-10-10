@@ -15,10 +15,24 @@ macro_rules! println {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+pub struct Ints {
+    pub first: u32,
+    pub second: u32,
+}
+
+impl Ints {
+    /// Construct a new pair, slot-identical to the old `(u32, u32)`
+    /// field (tuples are no longer slab items).
+    pub const fn new(first: u32, second: u32) -> Self {
+        Self { first, second }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
 pub struct Data {
     pub i: u32,
     pub float: f32,
-    pub ints: (u32, u32),
+    pub ints: Ints,
 }
 
 #[derive(Default, Debug, Clone, Copy, SlabItem)]
@@ -47,7 +61,7 @@ impl core::fmt::Display for DataChange {
             ),
             DataChangeTy::Ints => (
                 "ints",
-                format!("{:?}", self.data.read_unchecked(Id::<(u32, u32)>::ZERO)),
+                format!("{:?}", self.data.read_unchecked(Id::<Ints>::ZERO)),
             ),
         };
         f.write_str(&format!("change {field} to {value}"))
@@ -55,7 +69,7 @@ impl core::fmt::Display for DataChange {
 }
 
 impl DataChange {
-    fn new(ty: DataChangeTy, value: impl SlabItem) -> Self {
+    fn new(ty: DataChangeTy, value: impl SlabItem + Clone) -> Self {
         let mut s = Self {
             ty,
             ..Default::default()
@@ -72,7 +86,13 @@ impl DataChange {
     }
 
     pub fn ints(i: u32, j: u32) -> Self {
-        Self::new(DataChangeTy::Ints, (i, j))
+        Self::new(
+            DataChangeTy::Ints,
+            Ints {
+                first: i,
+                second: j,
+            },
+        )
     }
 
     pub fn apply(&self, data: &mut Data) {
@@ -84,7 +104,7 @@ impl DataChange {
                 data.float = self.data.read_unchecked(Id::ZERO);
             }
             DataChangeTy::Ints => {
-                data.ints = self.data.read_unchecked(Id::ZERO);
+                data.ints = self.data.read_unchecked(Id::<Ints>::ZERO);
             }
         }
     }
