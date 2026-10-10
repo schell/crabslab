@@ -71,9 +71,14 @@
 //!
 //! # Enums
 //!
-//! The extension detects derive attrs on structs only. Enum slab items
-//! (discriminant + payload) are currently CPU-only; a GPU `Item::Enum`
-//! arm can be added later if a concrete need appears.
+//! Fieldless (`#[repr(u32)]` unit-variant) enums serialize as one slot
+//! holding the variant's position, mirroring the CPU derive (which also
+//! writes the variant index, not any explicit discriminant). Unknown
+//! discriminants fall back to the first variant's position on the GPU;
+//! the CPU derive falls back to `#[default]` — the IR cannot see that
+//! attribute, so the two differ for enums whose default is not the first
+//! variant. Data-carrying enum variants are not expressible in wgsl-rs
+//! and remain CPU-only.
 
 use std::borrow::Cow;
 use wgsl_rs::ir;
@@ -284,10 +289,15 @@ fn to_array_field_stmts(
     ]
 }
 
-/// Deserialize one field (or array element) from `slab` at the running
-/// index `i`: an `array_container` temp, an offset-corrected copy into
-/// it, a `from_array` call binding the value, and an index advance.
-fn from_array_field_stmts(item_ty: &str, temp: &str, bind: &str, size: ir::Expr) -> Vec<ir::Stmt> {
+/// The copy phase of deserializing one field (or array element) from
+/// `slab` at the running index `i`: an `array_container` temp, an
+/// offset-corrected copy into it, and the index advance.
+///
+/// The value bindings happen LATER, in a second phase over all fields
+/// (see `make_from_array`): a field named `i` would otherwise shadow
+/// the running index, and the deshadow pass cannot tell which `i` the
+/// later copy statements refer to.
+fn from_array_field_copy(item_ty: &str, temp: &str, size: ir::Expr) -> Vec<ir::Stmt> {
     vec![
         ir::Stmt::Local(ir::Local {
             mutable: true,
@@ -302,18 +312,23 @@ fn from_array_field_stmts(item_ty: &str, temp: &str, bind: &str, size: ir::Expr)
             lit_u32(0),
             size.clone(),
         ),
-        ir::Stmt::Local(ir::Local {
-            mutable: false,
-            name: bind.to_string(),
-            ty: None,
-            init: Some(type_method_call(
-                item_ty,
-                "from_array",
-                vec![ir::Expr::Ident(temp.to_string())],
-            )),
-        }),
         advance_i(size),
     ]
+}
+
+/// The binding phase of deserializing one field (or array element):
+/// `let <bind> = <item_ty>::from_array(<temp>);`
+fn from_array_field_bind(item_ty: &str, temp: &str, bind: &str) -> ir::Stmt {
+    ir::Stmt::Local(ir::Local {
+        mutable: false,
+        name: bind.to_string(),
+        ty: None,
+        init: Some(type_method_call(
+            item_ty,
+            "from_array",
+            vec![ir::Expr::Ident(temp.to_string())],
+        )),
+    })
 }
 
 /// The shared function scaffolding: no generics, no attributes, the
@@ -434,10 +449,14 @@ fn make_to_array(s: &ir::ItemStruct, size_expr: &ir::Expr) -> ir::ItemFn {
     )
 }
 
-/// Build `fn from_array(slab: [u32; N]) -> Self`: running index `i`,
-/// one array_container/copy/from_array/advance quad per field, then a
-/// struct construction. Array fields unroll element-wise and rebuild
-/// with an array constructor expression.
+/// Build `fn from_array(slab: [u32; N]) -> Self`: running index `i`, one
+/// array_container/copy/advance triple per field (array fields unroll
+/// per-element), then — in a second phase, after every running-index use —
+/// the `from_array` value bindings, then a struct construction.
+///
+/// The two phases exist because a field named `i` would shadow the
+/// running index mid-walk, and the deshadow pass cannot tell which `i`
+/// later copy statements refer to (see `from_array_field_copy`).
 fn make_from_array(s: &ir::ItemStruct, size_expr: &ir::Expr) -> ir::ItemFn {
     let mut stmts = vec![ir::Stmt::Local(ir::Local {
         mutable: true,
@@ -446,6 +465,8 @@ fn make_from_array(s: &ir::ItemStruct, size_expr: &ir::Expr) -> ir::ItemFn {
         init: Some(lit_u32(0)),
     })];
 
+    // Phase 1: copy every field's slots out of the slab.
+    let mut bindings: Vec<(String, String, String)> = vec![];
     let mut fields: Vec<ir::FieldValue> = vec![];
     for f in &s.fields {
         match &f.ty {
@@ -457,12 +478,8 @@ fn make_from_array(s: &ir::ItemStruct, size_expr: &ir::Expr) -> ir::ItemFn {
                 for k in 0..n {
                     let temp = format!("{}_array_{}", f.name, k);
                     let bind = format!("{}_{}", f.name, k);
-                    stmts.extend(from_array_field_stmts(
-                        &item_ty,
-                        &temp,
-                        &bind,
-                        elem_size.clone(),
-                    ));
+                    stmts.extend(from_array_field_copy(&item_ty, &temp, elem_size.clone()));
+                    bindings.push((bind.clone(), item_ty.clone(), temp));
                     elems.push(ir::Expr::Ident(bind));
                 }
                 fields.push(ir::FieldValue {
@@ -473,18 +490,20 @@ fn make_from_array(s: &ir::ItemStruct, size_expr: &ir::Expr) -> ir::ItemFn {
             _ => {
                 let item_ty = slab_item_type_name(&f.ty);
                 let size = field_size_expr(&f.ty);
-                stmts.extend(from_array_field_stmts(
-                    &item_ty,
-                    &format!("{}_array", f.name),
-                    &f.name,
-                    size,
-                ));
+                let temp = format!("{}_array", f.name);
+                stmts.extend(from_array_field_copy(&item_ty, &temp, size));
+                bindings.push((f.name.clone(), item_ty, temp));
                 fields.push(ir::FieldValue {
                     member: f.name.clone(),
                     expr: ir::Expr::Ident(f.name.clone()),
                 });
             }
         }
+    }
+
+    // Phase 2: bind every field's value, after all running-index uses.
+    for (bind, item_ty, temp) in bindings {
+        stmts.push(from_array_field_bind(&item_ty, &temp, &bind));
     }
 
     stmts.push(ir::Stmt::Expr {
@@ -540,20 +559,173 @@ fn make_slab_impl(s: &ir::ItemStruct) -> ir::ItemImpl {
     }
 }
 
+// ===== Enum impls =====
+
+/// A `case <selector>` arm selector referencing the enum's rendered
+/// variant const (`EnumName_Variant`).
+fn variant_case(e: &ir::ItemEnum, index: usize) -> ir::CaseSelector {
+    ir::CaseSelector::Expr(ir::Expr::TypePath {
+        ty: e.name.clone(),
+        member: e.variants[index].name.clone(),
+    })
+}
+
+/// Build the switch used by both directions: the selector is the enum
+/// value (or its serialized slot), each arm names the variant const, and
+/// the arm body runs `body(variant_position)`. The default arm mirrors
+/// the CPU derive's fallback (the first variant's position — the CPU
+/// falls back to `#[default]`, which the IR cannot see).
+fn enum_switch(
+    e: &ir::ItemEnum,
+    selector: ir::Expr,
+    body: impl Fn(u32) -> Vec<ir::Stmt>,
+) -> ir::Stmt {
+    let mut arms: Vec<ir::SwitchArm> = e
+        .variants
+        .iter()
+        .enumerate()
+        .map(|(i, _)| ir::SwitchArm {
+            selectors: vec![variant_case(e, i)],
+            body: ir::Block {
+                stmts: body(i as u32),
+            },
+        })
+        .collect();
+    arms.push(ir::SwitchArm {
+        selectors: vec![ir::CaseSelector::Default],
+        body: ir::Block { stmts: body(0) },
+    });
+    ir::Stmt::Switch(ir::StmtSwitch {
+        selector,
+        arms,
+        has_explicit_default: true,
+    })
+}
+
+/// Build the slab impl for a fieldless `#[repr(u32)]` enum: one slot
+/// holding the variant's position, mirroring the CPU derive (which
+/// writes the variant index, not any explicit discriminant).
+fn make_enum_slab_impl(e: &ir::ItemEnum) -> ir::ItemImpl {
+    let size_expr = lit_u32(1);
+
+    // to_array: switch on the value, writing the variant's position.
+    let to_array = make_fn(
+        "to_array",
+        vec![ir::FnArg {
+            inter_stage_io: vec![],
+            name: "data".to_string(),
+            ty: enum_ir_type(e),
+            attrs: vec![],
+        }],
+        ir::ReturnType::Type {
+            annotation: ir::ReturnTypeAnnotation::None,
+            ty: slab_array_ty(&size_expr),
+        },
+        {
+            let mut stmts = vec![ir::Stmt::Local(ir::Local {
+                mutable: true,
+                name: "dest".to_string(),
+                ty: None,
+                init: Some(type_method_call(&e.name, "array_container", vec![])),
+            })];
+            stmts.push(enum_switch(e, ir::Expr::Ident("data".to_string()), |i| {
+                vec![ir::Stmt::Assignment {
+                    lhs: ir::Expr::ArrayIndexing {
+                        lhs: Box::new(ir::Expr::Ident("dest".to_string())),
+                        index: Box::new(lit_u32(0)),
+                    },
+                    rhs: lit_u32(i),
+                }]
+            }));
+            stmts.push(ir::Stmt::Expr {
+                expr: ir::Expr::Ident("dest".to_string()),
+                has_semi: false,
+            });
+            stmts
+        },
+    );
+
+    // from_array: switch on the first slot, returning the variant's
+    // position (the serialized form) per arm.
+    let from_array = make_fn(
+        "from_array",
+        vec![ir::FnArg {
+            inter_stage_io: vec![],
+            name: "slab".to_string(),
+            ty: slab_array_ty(&size_expr),
+            attrs: vec![],
+        }],
+        ir::ReturnType::Type {
+            annotation: ir::ReturnTypeAnnotation::None,
+            ty: enum_ir_type(e),
+        },
+        {
+            let selector = ir::Expr::ArrayIndexing {
+                lhs: Box::new(ir::Expr::Ident("slab".to_string())),
+                index: Box::new(lit_u32(0)),
+            };
+            vec![enum_switch(e, selector, |i| {
+                vec![ir::Stmt::Return(Some(lit_u32(i)))]
+            })]
+        },
+    );
+
+    ir::ItemImpl {
+        type_params: vec![],
+        const_params: vec![],
+        self_ty: e.name.clone(),
+        items: vec![
+            ir::ImplItem::Const(ir::ItemConst {
+                name: "SLAB_SIZE".to_string(),
+                ty: ir::Type::Scalar(ir::ScalarType::U32),
+                expr: size_expr.clone(),
+                attrs: vec![],
+            }),
+            ir::ImplItem::Fn(make_array_container(&size_expr)),
+            ir::ImplItem::Fn(to_array),
+            ir::ImplItem::Fn(from_array),
+        ],
+        attrs: vec![],
+    }
+}
+
+/// The IR type for an enum: wgsl-rs renders `#[repr(u32)]` enums as a
+/// `u32` alias, so the generated signatures name the enum and resolve
+/// through the alias.
+fn enum_ir_type(e: &ir::ItemEnum) -> ir::Type {
+    ir::Type::Struct {
+        name: e.name.clone(),
+        type_args: vec![],
+    }
+}
+
+/// A `#[derive(..., SlabItem)]` item the extension generates an impl
+/// for: structs walk their fields, fieldless enums serialize their
+/// variant position in a single slot.
+enum SlabSource {
+    Struct(ir::ItemStruct),
+    Enum(ir::ItemEnum),
+}
+
 /// Generate the slab impl block for each `#[derive(..., SlabItem)]`
-/// struct in the module.
+/// struct and fieldless enum in the module.
 fn generate_slab_impls(module: &mut ir::Module) {
-    let slab_structs: Vec<ir::ItemStruct> = module
+    let slab_items: Vec<SlabSource> = module
         .items
         .iter()
         .filter_map(|item| match item {
-            ir::Item::Struct(s) if has_slab_item(&s.attrs) => Some(s.clone()),
+            ir::Item::Struct(s) if has_slab_item(&s.attrs) => Some(SlabSource::Struct(s.clone())),
+            ir::Item::Enum(e) if has_slab_item(&e.attrs) => Some(SlabSource::Enum(e.clone())),
             _ => None,
         })
         .collect();
 
-    for s in &slab_structs {
-        module.items.push(ir::Item::Impl(make_slab_impl(s)));
+    for src in &slab_items {
+        let impl_block = match src {
+            SlabSource::Struct(s) => make_slab_impl(s),
+            SlabSource::Enum(e) => make_enum_slab_impl(e),
+        };
+        module.items.push(ir::Item::Impl(impl_block));
     }
 }
 

@@ -1,18 +1,5 @@
-#![allow(unexpected_cfgs)]
-#![cfg_attr(target_arch = "spirv", no_std)]
 use crabslab::{Array, Id, Slab, SlabItem};
 use glam::UVec3;
-
-#[macro_export]
-/// A wrapper around `std::println` that is a noop on the GPU.
-macro_rules! println {
-    ($($arg:tt)*) => {
-        #[cfg(not(target_arch = "spirv"))]
-        {
-            std::println!($($arg)*);
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
 pub struct Ints {
@@ -50,7 +37,6 @@ pub struct DataChange {
     pub data: [u32; 3],
 }
 
-#[cfg(not(target_arch = "spirv"))]
 impl core::fmt::Display for DataChange {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let (field, value) = match self.ty {
@@ -116,7 +102,6 @@ pub struct ArrayChange {
     pub change: DataChange,
 }
 
-#[cfg(not(target_arch = "spirv"))]
 impl core::fmt::Display for ArrayChange {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(&format!("{} of data at index {}", self.change, self.i))
@@ -204,19 +189,9 @@ impl ApplyDataChangeInvocation {
     }
 
     fn atomic_i_increment(&self, data_slab: &mut [u32], index: usize) {
-        #[cfg(target_arch = "spirv")]
-        unsafe {
-            spirv_std::arch::atomic_i_increment::<
-                u32,
-                { spirv_std::memory::Scope::Workgroup as u32 },
-                { spirv_std::memory::Semantics::UNIFORM_MEMORY.bits() },
-            >(&mut data_slab[index]);
-        }
-        #[cfg(not(target_arch = "spirv"))]
-        {
-            // Does not do atomically
-            data_slab[index] += 1;
-        }
+        // On the GPU this was an atomic increment in the (now ported)
+        // wgsl-rs shader; the CPU model is single-threaded.
+        data_slab[index] += 1;
     }
 
     fn increment_invocation(&self, data_slab: &mut [u32]) {
