@@ -35,6 +35,7 @@ To forget the CPU side of values, use [`Hybrid::into_gpu_only`].
 
 Finally, synchronize the slab once per frame (or more, or less) using [`SlabAllocator::commit`].
 
-On the GPU (using a shader written with [`spirv-std`](https://crates.io/crates/spirv-std)) use 
-`crabslab` to read values in a no_std context. 
+On the GPU, write your shader as a `wgsl-rs` `#[wgsl]` module and use `crabslab`'s
+`SlabItem` derive and the `slab_read!`/`slab_write!` macros to read and write values —
+`crabslab::SlabItemExt` generates the WGSL-side serialization from the same derives.
 See the [crabslab docs](https://docs.rs/crabslab/latest/crabslab/) for more info.

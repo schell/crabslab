@@ -54,12 +54,14 @@ pub mod slab {
     }
 
     /// A fieldless enum — the extension serializes unit-variant enums
-    /// as their variant position in one slot.
+    /// as their variant position in one slot. `#[default]` sits on a
+    /// non-first variant so the fallback tests exercise the wgsl-rs
+    /// synthesized `default()` method.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
     #[repr(u32)]
     pub enum Kind {
-        #[default]
         Alpha,
+        #[default]
         Beta,
     }
 
@@ -69,6 +71,28 @@ pub mod slab {
     pub struct Tagged {
         pub kind: Kind,
         pub weight: u32,
+    }
+
+    /// Field names that poison naive from_array codegen: `value_array`'s
+    /// value local would shadow `value`'s copy temp of the same name,
+    /// so the construction must consume the temps directly.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
+    pub struct Tricky {
+        pub value_array: u32,
+        pub value: u32,
+    }
+
+    /// An enum with explicit discriminants: the WIRE stays variant
+    /// positions in both worlds (the CPU derive writes the variant
+    /// index), while the WGSL values are the canonical consts —
+    /// `Mode__1from_array([1])` must yield `Mode_Slow` (20), not the
+    /// raw position.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
+    #[repr(u32)]
+    pub enum Mode {
+        Fast = 10,
+        #[default]
+        Slow = 20,
     }
 
     storage!(group(0), binding(0), read_write, SLAB: RuntimeArray<u32>);
@@ -211,6 +235,49 @@ mod test {
         // The wire form is the variant position.
         let raw = slab.as_ref();
         assert_eq!([1u32, 9], [raw[0], raw[1]]);
+
+        // The unknown-discriminant fallback is the `#[default]`
+        // variant — which is NOT the first variant here, proving both
+        // worlds read `#[default]` rather than assuming position 0.
+        assert_eq!(Kind::Beta, Kind::default());
+        assert_eq!(Kind::Beta, Kind::from_array([u32::MAX]));
+        assert_eq!(Kind::Beta, Kind::from_array([42]));
+    }
+
+    /// The poison field-name pair round-trips: `value_array`'s value
+    /// must not capture `value`'s copy temp in `from_array`.
+    #[test]
+    fn derived_tricky_round_trip() {
+        let tricky = Tricky {
+            value_array: 7,
+            value: 9,
+        };
+        assert_eq!(2, Tricky::SLAB_SIZE);
+        let mut slab = CpuSlab::new(vec![]);
+        let id = slab.append(&tricky);
+        assert_eq!(tricky, slab.read(id));
+
+        let raw = slab.as_ref();
+        assert_eq!([7u32, 9], [raw[0], raw[1]]);
+    }
+
+    /// Explicit discriminants: the wire is variant positions, the WGSL
+    /// values are the canonical consts, and the fallback hits the
+    /// `#[default]` variant on both sides.
+    #[test]
+    fn derived_explicit_discriminant_enum_round_trip() {
+        assert_eq!(1, Mode::SLAB_SIZE);
+        assert_eq!(Mode::Slow, Mode::default());
+
+        let mut slab = CpuSlab::new(vec![]);
+        let id = slab.append(&Mode::Slow);
+        assert_eq!(Mode::Slow, slab.read(id));
+
+        // The wire form is the variant POSITION, not the discriminant.
+        assert_eq!([1u32], slab.as_ref()[0..1]);
+
+        // Unknown positions fall back to the #[default] variant.
+        assert_eq!(Mode::Slow, Mode::from_array([99]));
     }
 
     /// The dual-world macros round-trip the derived structs through a
@@ -312,7 +379,7 @@ mod test {
             "expected nested Bar__1to_array call, got:\n{source}"
         );
         assert!(
-            source.contains("let inner = Bar__1from_array(inner_array);"),
+            source.contains("Bar__1from_array(inner_array)"),
             "expected nested Bar__1from_array call, got:\n{source}"
         );
 
@@ -342,11 +409,11 @@ mod test {
             "expected Deep -> Middle to_array recursion, got:\n{source}"
         );
         assert!(
-            source.contains("let leaf = Leaf__1from_array(leaf_array);"),
+            source.contains("Leaf__1from_array(leaf_array)"),
             "expected Middle -> Leaf from_array recursion, got:\n{source}"
         );
         assert!(
-            source.contains("let middle = Middle__1from_array(middle_array);"),
+            source.contains("Middle__1from_array(middle_array)"),
             "expected Deep -> Middle from_array recursion, got:\n{source}"
         );
 
@@ -366,8 +433,63 @@ mod test {
             "expected Tagged -> Kind to_array call, got:\n{source}"
         );
         assert!(
-            source.contains("let kind = Kind__1from_array(kind_array);"),
+            source.contains("Kind__1from_array(kind_array)"),
             "expected Tagged -> Kind from_array call, got:\n{source}"
+        );
+        // The unknown-discriminant fallback calls the `default()` method
+        // wgsl-rs synthesizes for `#[default]` enums — not a literal.
+        assert!(
+            source.contains("default: {\n            return Kind_default();"),
+            "expected the from_array fallback to call Kind_default(), got:\n{source}"
+        );
+        // wgsl-rs synthesizes the method itself; its body returns the
+        // `#[default]` variant's const — Beta, position 1.
+        assert!(
+            source.contains("fn Kind_default() -> Kind"),
+            "expected wgsl-rs to synthesize Kind_default(), got:\n{source}"
+        );
+        assert!(
+            source.contains("return Kind_Beta;"),
+            "expected the synthesized default to return the #[default] variant, got:\n{source}"
+        );
+        // The poison pair: the construction consumes the copy temps
+        // directly — no value local for `value_array` can shadow
+        // `value`'s temp.
+        assert!(
+            source.contains(
+                "return Tricky(u32__1from_array(value_array_array), u32__1from_array(value_array));"
+            ),
+            "expected Tricky__1from_array to consume its temps directly, got:\n{source}"
+        );
+        // Explicit discriminants: from_array matches POSITIONS (the
+        // wire) and returns the canonical CONSTS, so the returned value
+        // is comparable against the variant consts.
+        assert!(
+            source.contains("const Mode_Fast: u32 = 10u;"),
+            "expected the explicit discriminant const, got:\n{source}"
+        );
+        assert!(
+            source.contains("case 1u: {\n            return Mode_Slow;\n        }"),
+            "expected position selectors with canonical const returns, got:\n{source}"
+        );
+        assert!(
+            source.contains("fn Mode_default() -> Mode"),
+            "expected wgsl-rs to synthesize Mode_default(), got:\n{source}"
+        );
+        assert!(
+            source.contains("return Mode_Slow;\n}"),
+            "expected the synthesized default to return Mode_Slow, got:\n{source}"
+        );
+        assert!(
+            source.contains("default: {\n            return Mode_default();"),
+            "expected Mode__1from_array's fallback to call Mode_default(), got:\n{source}"
+        );
+        // to_array's default arm writes the #[default] variant's wire
+        // POSITION (Slow is position 1), not its canonical value (20),
+        // preserving the wire contract for out-of-range enum values.
+        assert!(
+            source.contains("default: {\n            dest[0u] = 1u;\n        }"),
+            "expected Mode__1to_array's fallback to write the default's position, got:\n{source}"
         );
 
         // Array fields unroll one to_array/from_array pair per element.
@@ -376,7 +498,7 @@ mod test {
             "expected unrolled array element to_array, got:\n{source}"
         );
         assert!(
-            source.contains("let tags_2 = u32__1from_array(tags_array_2);"),
+            source.contains("u32__1from_array(tags_array_2)"),
             "expected unrolled array element from_array, got:\n{source}"
         );
 
@@ -427,7 +549,7 @@ mod test {
             "expected Wrapper -> Deep to_array recursion, got:\n{source}"
         );
         assert!(
-            source.contains("let deep = Deep__1from_array(deep_array);"),
+            source.contains("Deep__1from_array(deep_array)"),
             "expected Wrapper -> Deep from_array recursion, got:\n{source}"
         );
         // The referenced methods come from the imported module's

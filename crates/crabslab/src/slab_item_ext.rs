@@ -72,13 +72,21 @@
 //! # Enums
 //!
 //! Fieldless (`#[repr(u32)]` unit-variant) enums serialize as one slot
-//! holding the variant's position, mirroring the CPU derive (which also
-//! writes the variant index, not any explicit discriminant). Unknown
-//! discriminants fall back to the first variant's position on the GPU;
-//! the CPU derive falls back to `#[default]` — the IR cannot see that
-//! attribute, so the two differ for enums whose default is not the first
-//! variant. Data-carrying enum variants are not expressible in wgsl-rs
-//! and remain CPU-only.
+//! holding the variant's **position** — the wire form mirrors the CPU
+//! derive, which writes the variant index, not any explicit
+//! discriminant. The WGSL values themselves are the variant consts
+//! (`Kind_Alpha`), so explicit discriminants work: `to_array` matches
+//! consts and writes positions; `from_array` matches positions and
+//! returns consts.
+//!
+//! The unknown-discriminant fallback calls the enum's `default()` —
+//! the inherent method wgsl-rs synthesizes for `#[default]` enums —
+//! so both worlds fall back to the `#[default]` variant. An enum
+//! deriving `SlabItem` **without** `#[default]` is rejected: the CPU
+//! derive falls back to `Default::default()`, a manual `Default` impl
+//! may pick any variant, and the GPU cannot see manual impls — no
+//! fallback the extension picks could agree. Data-carrying enum
+//! variants are not expressible in wgsl-rs and remain CPU-only.
 
 use std::borrow::Cow;
 use wgsl_rs::ir;
@@ -293,10 +301,10 @@ fn to_array_field_stmts(
 /// `slab` at the running index `i`: an `array_container` temp, an
 /// offset-corrected copy into it, and the index advance.
 ///
-/// The value bindings happen LATER, in a second phase over all fields
-/// (see `make_from_array`): a field named `i` would otherwise shadow
-/// the running index, and the deshadow pass cannot tell which `i` the
-/// later copy statements refer to.
+/// The temps are consumed directly by `make_from_array`'s struct
+/// construction (no user-named value locals): a field named `i` would
+/// otherwise shadow the running index, and the deshadow pass cannot
+/// tell which `i` the later copy statements refer to.
 fn from_array_field_copy(item_ty: &str, temp: &str, size: ir::Expr) -> Vec<ir::Stmt> {
     vec![
         ir::Stmt::Local(ir::Local {
@@ -314,21 +322,6 @@ fn from_array_field_copy(item_ty: &str, temp: &str, size: ir::Expr) -> Vec<ir::S
         ),
         advance_i(size),
     ]
-}
-
-/// The binding phase of deserializing one field (or array element):
-/// `let <bind> = <item_ty>::from_array(<temp>);`
-fn from_array_field_bind(item_ty: &str, temp: &str, bind: &str) -> ir::Stmt {
-    ir::Stmt::Local(ir::Local {
-        mutable: false,
-        name: bind.to_string(),
-        ty: None,
-        init: Some(type_method_call(
-            item_ty,
-            "from_array",
-            vec![ir::Expr::Ident(temp.to_string())],
-        )),
-    })
 }
 
 /// The shared function scaffolding: no generics, no attributes, the
@@ -451,12 +444,18 @@ fn make_to_array(s: &ir::ItemStruct, size_expr: &ir::Expr) -> ir::ItemFn {
 
 /// Build `fn from_array(slab: [u32; N]) -> Self`: running index `i`, one
 /// array_container/copy/advance triple per field (array fields unroll
-/// per-element), then — in a second phase, after every running-index use —
-/// the `from_array` value bindings, then a struct construction.
+/// per-element), then a struct construction whose arguments consume the
+/// copy temps directly through `from_array` calls.
 ///
-/// The two phases exist because a field named `i` would shadow the
-/// running index mid-walk, and the deshadow pass cannot tell which `i`
-/// later copy statements refer to (see `from_array_field_copy`).
+/// No user-named value locals are generated. Two properties depend on
+/// that: a field named `i` would shadow the running index mid-walk
+/// (and the deshadow pass cannot tell which `i` later copy statements
+/// refer to), and a field's binding can shadow another field's temp —
+/// `struct Foo { value_array: u32, value: u32 }` binds `value_array`
+/// right over `value`'s temp of the same name. With temps declared
+/// first and consumed positionally by the construction, the only
+/// declared names are `i` and the `{field}_array(_k)` temps, which are
+/// unique by construction.
 fn make_from_array(s: &ir::ItemStruct, size_expr: &ir::Expr) -> ir::ItemFn {
     let mut stmts = vec![ir::Stmt::Local(ir::Local {
         mutable: true,
@@ -465,8 +464,8 @@ fn make_from_array(s: &ir::ItemStruct, size_expr: &ir::Expr) -> ir::ItemFn {
         init: Some(lit_u32(0)),
     })];
 
-    // Phase 1: copy every field's slots out of the slab.
-    let mut bindings: Vec<(String, String, String)> = vec![];
+    // Copy every field's slots out of the slab into temps, recording
+    // the from_array call that consumes each temp.
     let mut fields: Vec<ir::FieldValue> = vec![];
     for f in &s.fields {
         match &f.ty {
@@ -477,10 +476,12 @@ fn make_from_array(s: &ir::ItemStruct, size_expr: &ir::Expr) -> ir::ItemFn {
                 let mut elems = vec![];
                 for k in 0..n {
                     let temp = format!("{}_array_{}", f.name, k);
-                    let bind = format!("{}_{}", f.name, k);
                     stmts.extend(from_array_field_copy(&item_ty, &temp, elem_size.clone()));
-                    bindings.push((bind.clone(), item_ty.clone(), temp));
-                    elems.push(ir::Expr::Ident(bind));
+                    elems.push(type_method_call(
+                        &item_ty,
+                        "from_array",
+                        vec![ir::Expr::Ident(temp)],
+                    ));
                 }
                 fields.push(ir::FieldValue {
                     member: f.name.clone(),
@@ -492,18 +493,12 @@ fn make_from_array(s: &ir::ItemStruct, size_expr: &ir::Expr) -> ir::ItemFn {
                 let size = field_size_expr(&f.ty);
                 let temp = format!("{}_array", f.name);
                 stmts.extend(from_array_field_copy(&item_ty, &temp, size));
-                bindings.push((f.name.clone(), item_ty, temp));
                 fields.push(ir::FieldValue {
                     member: f.name.clone(),
-                    expr: ir::Expr::Ident(f.name.clone()),
+                    expr: type_method_call(&item_ty, "from_array", vec![ir::Expr::Ident(temp)]),
                 });
             }
         }
-    }
-
-    // Phase 2: bind every field's value, after all running-index uses.
-    for (bind, item_ty, temp) in bindings {
-        stmts.push(from_array_field_bind(&item_ty, &temp, &bind));
     }
 
     stmts.push(ir::Stmt::Expr {
@@ -570,36 +565,100 @@ fn variant_case(e: &ir::ItemEnum, index: usize) -> ir::CaseSelector {
     })
 }
 
-/// Build the switch used by both directions: the selector is the enum
-/// value (or its serialized slot), each arm names the variant const, and
-/// the arm body runs `body(variant_position)`. The default arm mirrors
-/// the CPU derive's fallback (the first variant's position — the CPU
-/// falls back to `#[default]`, which the IR cannot see).
-fn enum_switch(
-    e: &ir::ItemEnum,
-    selector: ir::Expr,
-    body: impl Fn(u32) -> Vec<ir::Stmt>,
-) -> ir::Stmt {
-    let mut arms: Vec<ir::SwitchArm> = e
-        .variants
+/// Whether an enum variant carries `#[default]` (mirroring wgsl-rs's
+/// own detection): `Attribute { path: "default", args: [] }`.
+fn is_default_variant(v: &ir::EnumVariant) -> bool {
+    v.attrs
         .iter()
-        .enumerate()
-        .map(|(i, _)| ir::SwitchArm {
-            selectors: vec![variant_case(e, i)],
-            body: ir::Block {
-                stmts: body(i as u32),
-            },
+        .any(|a| a.path == "default" && a.args.is_empty())
+}
+
+/// The variant's rendered const as an expression (`Kind_Alpha`) — the
+/// canonical WGSL value of that variant, even with explicit
+/// discriminants.
+fn variant_const_expr(e: &ir::ItemEnum, index: usize) -> ir::Expr {
+    ir::Expr::TypePath {
+        ty: e.name.clone(),
+        member: e.variants[index].name.clone(),
+    }
+}
+
+/// A `case <position>u` arm selector — the WIRE form of a variant. The
+/// wire is variant positions in both worlds (the CPU derive writes the
+/// variant index, not any explicit discriminant), so `from_array`
+/// matches positions while `to_array` matches the canonical consts.
+fn case_position(index: u32) -> ir::CaseSelector {
+    ir::CaseSelector::Literal(ir::Lit::Int {
+        digits: index.to_string(),
+        suffix: "u32".to_string(),
+    })
+}
+
+/// Build the switch used in both directions: the selector expressions
+/// come from `selectors` (variant consts for `to_array`, wire
+/// positions for `from_array`), and each arm body runs
+/// `body(variant_position)`. The default arm runs `default_body` —
+/// normally a call to the enum's `default()`, the method wgsl-rs
+/// synthesizes for `#[default]` enums, so both worlds fall back to the
+/// same variant.
+fn enum_switch(
+    selector: ir::Expr,
+    variant_count: usize,
+    selectors: impl Fn(u32) -> Vec<ir::CaseSelector>,
+    body: impl Fn(u32) -> Vec<ir::Stmt>,
+    default_body: impl FnOnce() -> Vec<ir::Stmt>,
+) -> ir::Stmt {
+    let mut arms: Vec<ir::SwitchArm> = (0..variant_count as u32)
+        .map(|i| ir::SwitchArm {
+            selectors: selectors(i),
+            body: ir::Block { stmts: body(i) },
         })
         .collect();
     arms.push(ir::SwitchArm {
         selectors: vec![ir::CaseSelector::Default],
-        body: ir::Block { stmts: body(0) },
+        body: ir::Block {
+            stmts: default_body(),
+        },
     });
     ir::Stmt::Switch(ir::StmtSwitch {
         selector,
         arms,
         has_explicit_default: true,
     })
+}
+
+/// The index of the `#[default]` variant.
+///
+/// Panics when no variant carries it: `Self: Default` does not imply
+/// `#[default]` — a manual `Default` impl may pick any variant, and
+/// the GPU cannot see manual impls, so no fallback the extension picks
+/// could match the CPU derive's. Rejecting is the only honest option
+/// (the CPU derive's `where Self: Default` bound only surfaces at use
+/// sites, so the module can otherwise compile while diverging).
+fn default_variant_index(e: &ir::ItemEnum) -> usize {
+    e.variants
+        .iter()
+        .position(is_default_variant)
+        .unwrap_or_else(|| {
+            panic!(
+                "SlabItemExt: the enum `{}` derives SlabItem but has no \
+             `#[default]` variant. The CPU derive falls back to \
+             `Default::default()` for unknown discriminants, and the \
+             GPU cannot know which variant a manual `Default` impl \
+             picks — mark the default variant with `#[default]` \
+             (which requires `#[derive(Default)]`) so both worlds agree.",
+                e.name
+            )
+        })
+}
+
+/// The unknown-discriminant fallback expression: the enum's `default()`
+/// method (which wgsl-rs synthesizes for `#[default]` enums, rendering
+/// `Kind_default()`). Panics when no variant carries `#[default]` (see
+/// [`default_variant_index`] for the rationale).
+fn default_fallback(e: &ir::ItemEnum) -> ir::Expr {
+    default_variant_index(e);
+    type_method_call(&e.name, "default", vec![])
 }
 
 /// Build the slab impl for a fieldless `#[repr(u32)]` enum: one slot
@@ -628,15 +687,28 @@ fn make_enum_slab_impl(e: &ir::ItemEnum) -> ir::ItemImpl {
                 ty: None,
                 init: Some(type_method_call(&e.name, "array_container", vec![])),
             })];
-            stmts.push(enum_switch(e, ir::Expr::Ident("data".to_string()), |i| {
+            let write_slot = |rhs: ir::Expr| {
                 vec![ir::Stmt::Assignment {
                     lhs: ir::Expr::ArrayIndexing {
                         lhs: Box::new(ir::Expr::Ident("dest".to_string())),
                         index: Box::new(lit_u32(0)),
                     },
-                    rhs: lit_u32(i),
+                    rhs,
                 }]
-            }));
+            };
+            stmts.push(enum_switch(
+                ir::Expr::Ident("data".to_string()),
+                e.variants.len(),
+                |i| vec![variant_case(e, i as usize)],
+                |i| write_slot(lit_u32(i)),
+                // Unreachable for valid values (the CPU derive's
+                // to_array match is exhaustive; only an out-of-range
+                // u32 — possible since WGSL enums are aliases — lands
+                // here). Write the #[default] variant's wire POSITION,
+                // not its canonical value, so the slot always holds a
+                // valid wire ordinal.
+                || write_slot(lit_u32(default_variant_index(e) as u32)),
+            ));
             stmts.push(ir::Stmt::Expr {
                 expr: ir::Expr::Ident("dest".to_string()),
                 has_semi: false,
@@ -664,9 +736,23 @@ fn make_enum_slab_impl(e: &ir::ItemEnum) -> ir::ItemImpl {
                 lhs: Box::new(ir::Expr::Ident("slab".to_string())),
                 index: Box::new(lit_u32(0)),
             };
-            vec![enum_switch(e, selector, |i| {
-                vec![ir::Stmt::Return(Some(lit_u32(i)))]
-            })]
+            vec![enum_switch(
+                selector,
+                e.variants.len(),
+                |i| vec![case_position(i)],
+                // The arms return the variant's const — the canonical
+                // WGSL value — while the wire (the matched slot and
+                // the case selectors) stays variant positions,
+                // mirroring the CPU derive.
+                |i| vec![ir::Stmt::Return(Some(variant_const_expr(e, i as usize)))],
+                || {
+                    // The unknown-discriminant fallback: the CPU derive
+                    // falls back to `Default::default()`, and the GPU
+                    // calls the `default()` method wgsl-rs synthesizes
+                    // for `#[default]` enums — the same variant.
+                    vec![ir::Stmt::Return(Some(default_fallback(e)))]
+                },
+            )]
         },
     );
 
