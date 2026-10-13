@@ -73,12 +73,15 @@
 //!
 //! Fieldless (`#[repr(u32)]` unit-variant) enums serialize as one slot
 //! holding the variant's position, mirroring the CPU derive (which also
-//! writes the variant index, not any explicit discriminant). Unknown
-//! discriminants fall back to the first variant's position on the GPU;
-//! the CPU derive falls back to `#[default]` — the IR cannot see that
-//! attribute, so the two differ for enums whose default is not the first
-//! variant. Data-carrying enum variants are not expressible in wgsl-rs
-//! and remain CPU-only.
+//! writes the variant index, not any explicit discriminant). The
+//! unknown-discriminant fallback calls the enum's `default()` — the
+//! inherent method wgsl-rs synthesizes for `#[default]` enums (`Kind`
+//! and `Kind_default` manglings are identical) — so both worlds fall
+//! back to the `#[default]` variant, which the CPU derive requires.
+//! An enum without `#[default]` falls back to the first variant's
+//! position on the GPU; unreachable in practice, since the CPU derive
+//! needs `Self: Default`, which needs `#[default]`. Data-carrying enum
+//! variants are not expressible in wgsl-rs and remain CPU-only.
 
 use std::borrow::Cow;
 use wgsl_rs::ir;
@@ -570,15 +573,25 @@ fn variant_case(e: &ir::ItemEnum, index: usize) -> ir::CaseSelector {
     })
 }
 
+/// Whether an enum variant carries `#[default]` (mirroring wgsl-rs's
+/// own detection): `Attribute { path: "default", args: [] }`.
+fn is_default_variant(v: &ir::EnumVariant) -> bool {
+    v.attrs
+        .iter()
+        .any(|a| a.path == "default" && a.args.is_empty())
+}
+
 /// Build the switch used by both directions: the selector is the enum
-/// value (or its serialized slot), each arm names the variant const, and
-/// the arm body runs `body(variant_position)`. The default arm mirrors
-/// the CPU derive's fallback (the first variant's position — the CPU
-/// falls back to `#[default]`, which the IR cannot see).
+/// value (or its serialized slot), each arm names the variant const,
+/// and the arm body runs `body(variant_position)`. The default arm
+/// runs `default_body` — normally a call to the enum's `default()`,
+/// the method wgsl-rs synthesizes for `#[default]` enums, so both
+/// worlds fall back to the same variant.
 fn enum_switch(
     e: &ir::ItemEnum,
     selector: ir::Expr,
     body: impl Fn(u32) -> Vec<ir::Stmt>,
+    default_body: impl FnOnce() -> Vec<ir::Stmt>,
 ) -> ir::Stmt {
     let mut arms: Vec<ir::SwitchArm> = e
         .variants
@@ -593,13 +606,29 @@ fn enum_switch(
         .collect();
     arms.push(ir::SwitchArm {
         selectors: vec![ir::CaseSelector::Default],
-        body: ir::Block { stmts: body(0) },
+        body: ir::Block {
+            stmts: default_body(),
+        },
     });
     ir::Stmt::Switch(ir::StmtSwitch {
         selector,
         arms,
         has_explicit_default: true,
     })
+}
+
+/// The unknown-discriminant fallback expression: the enum's `default()`
+/// method (which wgsl-rs synthesizes for `#[default]` enums, rendering
+/// `Kind_default()`) when the variant is marked, else the first
+/// variant's position. The latter case is unreachable in practice —
+/// the CPU derive requires `Self: Default`, which requires
+/// `#[default]`.
+fn default_fallback(e: &ir::ItemEnum) -> ir::Expr {
+    if e.variants.iter().any(is_default_variant) {
+        type_method_call(&e.name, "default", vec![])
+    } else {
+        lit_u32(0)
+    }
 }
 
 /// Build the slab impl for a fieldless `#[repr(u32)]` enum: one slot
@@ -628,15 +657,24 @@ fn make_enum_slab_impl(e: &ir::ItemEnum) -> ir::ItemImpl {
                 ty: None,
                 init: Some(type_method_call(&e.name, "array_container", vec![])),
             })];
-            stmts.push(enum_switch(e, ir::Expr::Ident("data".to_string()), |i| {
+            let write_slot = |rhs: ir::Expr| {
                 vec![ir::Stmt::Assignment {
                     lhs: ir::Expr::ArrayIndexing {
                         lhs: Box::new(ir::Expr::Ident("dest".to_string())),
                         index: Box::new(lit_u32(0)),
                     },
-                    rhs: lit_u32(i),
+                    rhs,
                 }]
-            }));
+            };
+            stmts.push(enum_switch(
+                e,
+                ir::Expr::Ident("data".to_string()),
+                |i| write_slot(lit_u32(i)),
+                // Unreachable for valid values (the CPU derive's
+                // to_array match is exhaustive); write the default
+                // value for robustness.
+                || write_slot(default_fallback(e)),
+            ));
             stmts.push(ir::Stmt::Expr {
                 expr: ir::Expr::Ident("dest".to_string()),
                 has_semi: false,
@@ -664,9 +702,18 @@ fn make_enum_slab_impl(e: &ir::ItemEnum) -> ir::ItemImpl {
                 lhs: Box::new(ir::Expr::Ident("slab".to_string())),
                 index: Box::new(lit_u32(0)),
             };
-            vec![enum_switch(e, selector, |i| {
-                vec![ir::Stmt::Return(Some(lit_u32(i)))]
-            })]
+            vec![enum_switch(
+                e,
+                selector,
+                |i| vec![ir::Stmt::Return(Some(lit_u32(i)))],
+                || {
+                    // The unknown-discriminant fallback: the CPU derive
+                    // falls back to `Default::default()`, and the GPU
+                    // calls the `default()` method wgsl-rs synthesizes
+                    // for `#[default]` enums — the same variant.
+                    vec![ir::Stmt::Return(Some(default_fallback(e)))]
+                },
+            )]
         },
     );
 

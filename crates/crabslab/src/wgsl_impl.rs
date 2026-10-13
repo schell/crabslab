@@ -54,12 +54,14 @@ pub mod slab {
     }
 
     /// A fieldless enum — the extension serializes unit-variant enums
-    /// as their variant position in one slot.
+    /// as their variant position in one slot. `#[default]` sits on a
+    /// non-first variant so the fallback tests exercise the wgsl-rs
+    /// synthesized `default()` method.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
     #[repr(u32)]
     pub enum Kind {
-        #[default]
         Alpha,
+        #[default]
         Beta,
     }
 
@@ -211,6 +213,13 @@ mod test {
         // The wire form is the variant position.
         let raw = slab.as_ref();
         assert_eq!([1u32, 9], [raw[0], raw[1]]);
+
+        // The unknown-discriminant fallback is the `#[default]`
+        // variant — which is NOT the first variant here, proving both
+        // worlds read `#[default]` rather than assuming position 0.
+        assert_eq!(Kind::Beta, Kind::default());
+        assert_eq!(Kind::Beta, Kind::from_array([u32::MAX]));
+        assert_eq!(Kind::Beta, Kind::from_array([42]));
     }
 
     /// The dual-world macros round-trip the derived structs through a
@@ -368,6 +377,22 @@ mod test {
         assert!(
             source.contains("let kind = Kind__1from_array(kind_array);"),
             "expected Tagged -> Kind from_array call, got:\n{source}"
+        );
+        // The unknown-discriminant fallback calls the `default()` method
+        // wgsl-rs synthesizes for `#[default]` enums — not a literal.
+        assert!(
+            source.contains("default: {\n            return Kind_default();"),
+            "expected the from_array fallback to call Kind_default(), got:\n{source}"
+        );
+        // wgsl-rs synthesizes the method itself; its body returns the
+        // `#[default]` variant's const — Beta, position 1.
+        assert!(
+            source.contains("fn Kind_default() -> Kind"),
+            "expected wgsl-rs to synthesize Kind_default(), got:\n{source}"
+        );
+        assert!(
+            source.contains("return Kind_Beta;"),
+            "expected the synthesized default to return the #[default] variant, got:\n{source}"
         );
 
         // Array fields unroll one to_array/from_array pair per element.
