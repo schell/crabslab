@@ -15,9 +15,12 @@
 //!
 //! CPU-only impls (u8..u128, f64, tuples, arrays, glam) live in
 //! [`crate::impl_slab_item`]; slab I/O (`read_slab`/`write_slab`) lives on
-//! the `CpuSlabItem` extension trait in [`crate::slab`].
+//! the `CpuSlabItem` extension trait, re-exported at the crate root.
 use wgsl_rs::wgsl;
 
+/// The unified CPU/GPU [`SlabItem`] trait and its WGSL-expressible
+/// primitive impls, transpiled into importable WGSL.
+#[allow(missing_docs)]
 #[wgsl]
 pub mod slab {
     use wgsl_rs::std::*;

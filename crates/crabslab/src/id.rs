@@ -6,7 +6,16 @@ use crate::SlabItem;
 /// `u32` value of an [`Id`] that does not point to any item.
 pub const ID_NONE: u32 = u32::MAX;
 
-/// An identifier that can be used to read or write a type from/into the slab.
+/// A typed index into a slab.
+///
+/// `Id<T>` identifies a `T` stored at some slot of a slab: it wraps a
+/// `u32` slot index, and the `T` parameter keeps ids of different slab
+/// item types from being mixed up. Ids are plain values - they remain
+/// valid as long as the underlying slab slot does - and they implement
+/// [`SlabItem`] themselves, so ids can be stored in slabs too.
+///
+/// Slabs of `u32` support indexing directly with `Id<T>`: `slab[id]`
+/// yields the `&T` backed by the slot's `T::SLAB_SIZE` words.
 #[repr(transparent)]
 pub struct Id<T>(pub(crate) u32, PhantomData<T>);
 
@@ -160,6 +169,7 @@ impl<T> Id<T> {
     /// An `Id` that points to the first slot on a slab.
     pub const ZERO: Self = Id::new(0);
 
+    /// Create an `Id` from a raw slot index.
     pub const fn new(i: u32) -> Self {
         Id(i, PhantomData)
     }
@@ -174,10 +184,12 @@ impl<T> Id<T> {
         self.0
     }
 
+    /// Returns `true` if this is the non-id ([`Id::NONE`]).
     pub fn is_none(&self) -> bool {
         *self == Id::NONE
     }
 
+    /// Returns `true` if this id points at an item.
     pub fn is_some(&self) -> bool {
         !self.is_none()
     }

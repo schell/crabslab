@@ -51,7 +51,7 @@ reads them out symmetrically.
 * a few new structs for working with slabs
   - [`Id`]
   - [`Array`]
-  - [`Offset`]
+  - [`Offset`](offset::Offset)
 * a helper struct [`CpuSlab`] which wraps anything implementing [`GrowableSlab`]
 * the [`slab_item`] module, which holds the [`SlabItem`] trait definition, the
   WGSL-expressible primitive impls, and the dual-world [`slab_read!`] /
