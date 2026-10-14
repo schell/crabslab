@@ -94,6 +94,36 @@ mod test {
         assert_eq!(foo, slab.read(id));
     }
 
+    /// The dual-world macros round-trip the derived structs through a
+    /// plain `[u32; N]`, including at a nonzero offset.
+    #[test]
+    fn macros_round_trip_array() {
+        let foo = Foo {
+            count: 7,
+            inner: Bar {
+                value: 1.5,
+                flag: true,
+            },
+            tags: [4, 5, 6],
+        };
+
+        let mut slab = [0u32; Foo::SLAB_SIZE];
+        slab_write!(Foo, slab, 0, foo);
+        let read: Foo;
+        slab_read!(Foo, slab, 0, read);
+        assert_eq!(foo, read);
+
+        // A nonzero offset: the surrounding slots stay untouched.
+        let mut slab = [0u32; Foo::SLAB_SIZE + 3];
+        slab_write!(Foo, slab, 2, foo);
+        assert_eq!(0, slab[0]);
+        assert_eq!(0, slab[1]);
+        assert_eq!(0, slab[Foo::SLAB_SIZE + 2]);
+        let read: Foo;
+        slab_read!(Foo, slab, 2, read);
+        assert_eq!(foo, read);
+    }
+
     #[test]
     fn generates_wgsl() {
         let source = WGSL_SOURCE.wgsl_source().unwrap();
