@@ -109,10 +109,16 @@ pub mod slab {
 
 pub use slab::*;
 
+// Re-export the derive alongside the trait so a glob import
+// (`use crabslab::slab_item::*;`) brings both the trait (type
+// namespace) and the derive macro (macro namespace) into scope —
+// `#[wgsl]` modules only accept glob imports.
+pub use ::crabslab_derive::SlabItem;
+
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{CpuSlabItem, Slab};
+    use crate::CpuSlabItem;
 
     /// Round-trip every promoted primitive through `to_array`/`from_array`.
     #[test]
