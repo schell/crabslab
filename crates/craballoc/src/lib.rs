@@ -50,9 +50,9 @@ pub enum Error {
 #[cfg(all(test, feature = "wgpu"))]
 fn wgpu_runtime() -> crate::runtime::WgpuRuntime {
     let backends = wgpu::Backends::PRIMARY;
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let adapter =
         futures_lite::future::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

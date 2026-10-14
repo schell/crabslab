@@ -121,6 +121,11 @@ pub use slab::*;
 // `#[wgsl]` modules only accept glob imports.
 pub use ::crabslab_derive::SlabItem;
 
+// Same for the dual-world statement macros: downstream `#[wgsl]`
+// modules invoke them by bare name (the parser only captures
+// single-ident macros), so they must travel with the glob too.
+pub use crate::{slab_read, slab_write};
+
 /// Read a `SlabItem` from `$slab` at `$offset`, assigning it into the
 /// caller-declared `$dest`.
 ///

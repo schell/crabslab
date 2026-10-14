@@ -494,6 +494,19 @@ trait BackendUpdate {
     /// * In the case of CpuRuntime, this runs the update shader function manually for each change.
     /// * In the case of WgpuRuntime, this invokes the compute shader that performs the updates on the GPU.
     fn apply_backend_changes(&mut self);
+
+    /// The number of invocations that successfully ran during the last
+    /// [`BackendUpdate::apply_backend_changes`].
+    ///
+    /// * In the case of CpuRuntime, this reads the counter the CPU-side
+    ///   run incremented in the data slab.
+    /// * In the case of WgpuRuntime, this is the atomic counter the
+    ///   shader incremented in its counters buffer.
+    fn invocations_ran(&mut self) -> u32;
+
+    /// The number of invocations that were skipped (out of bounds)
+    /// during the last [`BackendUpdate::apply_backend_changes`].
+    fn invocations_skipped(&mut self) -> u32;
 }
 
 impl BackendUpdate for GpuUpdateTest<CpuRuntime, ()> {
@@ -517,6 +530,20 @@ impl BackendUpdate for GpuUpdateTest<CpuRuntime, ()> {
                 }
             }
         }
+    }
+
+    fn invocations_ran(&mut self) -> u32 {
+        futures_lite::future::block_on(self.arena.read_slab(self.invocation_count.array()))
+            .unwrap()
+            .pop()
+            .unwrap()
+    }
+
+    fn invocations_skipped(&mut self) -> u32 {
+        futures_lite::future::block_on(self.arena.read_slab(self.invocations_skipped.array()))
+            .unwrap()
+            .pop()
+            .unwrap()
     }
 }
 
@@ -776,11 +803,7 @@ reason = if unchanged_since_previous {
             // Apply the changes from the changes_slab to the data_slab using a shader
             log::info!("  applying backend changes");
             self.apply_backend_changes();
-            let invocations_ran =
-                futures_lite::future::block_on(self.arena.read_slab(self.invocation_count.array()))
-                    .unwrap()
-                    .pop()
-                    .unwrap();
+            let invocations_ran = self.invocations_ran();
             assert_eq!(
                 invocation.total_invocations_required(),
                 invocations_ran,
@@ -986,16 +1009,10 @@ fn invocations_sanity() {
     let workgroups = apply_invocation.workgroup_dimensions();
     assert_eq!(UVec3::ONE, workgroups);
 
-    let invocations_ran =
-        futures_lite::future::block_on(test.arena.read_slab(test.invocation_count.array()))
-            .unwrap()
-            .pop()
-            .unwrap();
-    let invocations_skipped =
-        futures_lite::future::block_on(test.arena.read_slab(test.invocations_skipped.array()))
-            .unwrap()
-            .pop()
-            .unwrap();
+    // The counters live in the shader's counters buffer now (WGSL
+    // forbids atomics on the plain-`u32` data slab).
+    let invocations_ran = test.invocations_ran();
+    let invocations_skipped = test.invocations_skipped();
     let total_invocations = invocations_ran + invocations_skipped;
 
     assert_eq!(

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1ff70604513e3d84f2d86906f66a2ca3b0c7ec9394601d726fa849c49172517a # shrinks to value_data = [Single(Data { i: 0, float: 5.7020552e22, ints: Ints { first: 0, second: 0 } }, [DataChange { ty: I, data: [0, 0, 0] }]), Single(Data { i: 0, float: 1.0731262e-7, ints: Ints { first: 0, second: 0 } }, [DataChange { ty: I, data: [1, 0, 0] }])]
