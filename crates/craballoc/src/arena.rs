@@ -13,7 +13,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use crabslab::{Array, Id, Slab, SlabItem};
+use crabslab::{Array, CpuSlabItem, Id, Slab, SlabItem};
 use snafu::OptionExt;
 
 use crate::{
@@ -133,7 +133,7 @@ impl<T: ?Sized, S> Clone for Value<T, S> {
     }
 }
 
-impl<T: Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
+impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
     /// Return the [`Id<T>`] that points to this `T` on the slab.
     pub fn id(&self) -> Id<T> {
         Id::new(self.update_source.source_id().range.first_index)
@@ -354,7 +354,7 @@ impl<R: IsRuntime> Arena<R> {
     /// Allocate a new value from the arena.
     ///
     /// This value has bidirectional synchonization.
-    pub fn new_value<T: SlabItem>(&self, value: T) -> Value<T> {
+    pub fn new_value<T: SlabItem + Clone>(&self, value: T) -> Value<T> {
         let update_source = self.new_update_source(value.slab_data(), std::any::type_name::<T>());
         Value {
             update_source,
@@ -365,7 +365,10 @@ impl<R: IsRuntime> Arena<R> {
     /// Allocate a new array of values from the arena.
     ///
     /// These values have bidirectional synchronization.
-    pub fn new_array<T: SlabItem>(&self, values: impl IntoIterator<Item = T>) -> Value<[T]> {
+    pub fn new_array<T: SlabItem + Clone>(
+        &self,
+        values: impl IntoIterator<Item = T>,
+    ) -> Value<[T]> {
         let data = values.into_iter().fold(vec![], |mut acc, value| {
             acc.extend(value.slab_data());
             acc
@@ -388,7 +391,10 @@ impl<R: IsRuntime> Arena<R> {
     }
 
     #[cfg(test)]
-    pub async fn read_slab<T: SlabItem>(&self, array: Array<T>) -> Result<Vec<T>, crate::Error> {
+    pub async fn read_slab<T: SlabItem + Clone>(
+        &self,
+        array: Array<T>,
+    ) -> Result<Vec<T>, crate::Error> {
         let buffer = self.commit();
         let buffer_len = self.bump_allocator.capacity();
         let u32_array = array.into_u32_array();

@@ -1,7 +1,7 @@
 use std::ops::{Deref, DerefMut};
 
 use craballoc_test_wire_types::{
-    AnyChangeId, ApplyDataChangeInvocation, ArrayChange, Data, DataChange, DataChangeTy,
+    AnyChangeId, ApplyDataChangeInvocation, ArrayChange, Data, DataChange, DataChangeTy, Ints,
 };
 use crabslab::{Array, Id};
 use glam::UVec3;
@@ -100,17 +100,17 @@ fn arena_roundtrip_sanity() {
             Data {
                 i: 0,
                 float: 0.0,
-                ints: (0, 0),
+                ints: Ints::new(0, 0),
             },
             Data {
                 i: 1,
                 float: 1.0,
-                ints: (1, 1),
+                ints: Ints::new(1, 1),
             },
             Data {
                 i: 2,
                 float: 2.0,
-                ints: (2, 2),
+                ints: Ints::new(2, 2),
             },
         ]);
         let _ = arena.commit();
@@ -269,17 +269,17 @@ fn array_subslice_sanity() {
         Data {
             i: 0,
             float: 1.0,
-            ints: (1, 1),
+            ints: Ints::new(1, 1),
         },
         Data {
             i: 1,
             float: 2.0,
-            ints: (2, 2),
+            ints: Ints::new(2, 2),
         },
         Data {
             i: 2,
             float: 3.0,
-            ints: (3, 3),
+            ints: Ints::new(3, 3),
         },
     ];
 
@@ -289,12 +289,12 @@ fn array_subslice_sanity() {
 
     log::info!("updating the initial values");
     // change the initial values
-    initial_values[1].ints = (666, 666);
-    initial_values[2].ints = (420, 420);
+    initial_values[1].ints = Ints::new(666, 666);
+    initial_values[2].ints = Ints::new(420, 420);
     // modify the slab values to match
     values.modify_range(1u32..3, |items| {
-        items[0].ints = (666, 666);
-        items[1].ints = (420, 420);
+        items[0].ints = Ints::new(666, 666);
+        items[1].ints = Ints::new(420, 420);
     });
     log::debug!("updated_ranges: {:?}", values.updated_ranges());
     ensure!(slab, initial_values, values);
@@ -320,8 +320,8 @@ fn array_subslice_sanity() {
     ensure!(slab, initial_values, values);
 
     // Ensure the other setting functions work too
-    initial_values[2].ints = (32, 32);
-    values.modify_item(2, |data| data.ints = (32, 32));
+    initial_values[2].ints = Ints::new(32, 32);
+    values.modify_item(2, |data| data.ints = Ints::new(32, 32));
     ensure!(slab, initial_values, values);
 }
 
@@ -397,7 +397,7 @@ fn arb_data() -> impl Strategy<Value = Data> {
         .prop_map(|(i, float, ints_i, ints_j)| Data {
             i,
             float,
-            ints: (ints_i, ints_j),
+            ints: Ints::new(ints_i, ints_j),
         })
 }
 
@@ -812,7 +812,7 @@ fn gpu_update_test_sanity_on_cpu() {
         Data {
             i: 0,
             float: 0.0,
-            ints: (0, 0),
+            ints: Ints::new(0, 0),
         },
         vec![
             DataChange::i(1),
@@ -834,7 +834,7 @@ fn gpu_update_test_sanity_on_gpu() {
         Data {
             i: 0,
             float: 0.0,
-            ints: (0, 0),
+            ints: Ints::new(0, 0),
         },
         vec![
             DataChange::i(1),
@@ -856,7 +856,7 @@ fn gpu_array_update_test_sanity_on_cpu() {
         vec![Data {
             i: 1683186,
             float: 2.1727349e24,
-            ints: (348221601, 1304208859),
+            ints: Ints::new(348221601, 1304208859),
         }],
         vec![ArrayChange {
             i: 0,
@@ -881,7 +881,7 @@ fn gpu_array_update_test_sanity_on_gpu() {
         vec![Data {
             i: 1683186,
             float: 2.1727349e24,
-            ints: (348221601, 1304208859),
+            ints: Ints::new(348221601, 1304208859),
         }],
         vec![ArrayChange {
             i: 0,
@@ -944,7 +944,7 @@ fn one_datum() -> ValueData {
         vec![Data {
             i: 0,
             float: 0.0,
-            ints: (0, 0),
+            ints: Ints::new(0, 0),
         }],
         vec![ArrayChange {
             i: 0,
