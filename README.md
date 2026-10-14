@@ -62,7 +62,7 @@ reads them out symmetrically.
 use crabslab::{CpuSlab, Slab, GrowableSlab, SlabItem, Id};
 use glam::{Vec3, Vec4};
 
-#[derive(Debug, Default, SlabItem, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, SlabItem, PartialEq)]
 struct Light {
     direction: Vec3,
     color: Vec4,

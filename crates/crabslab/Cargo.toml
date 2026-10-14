@@ -20,16 +20,11 @@ glam = ["dep:glam"]
 async-channel = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }
 futures-lite = { workspace = true, optional = true }
+glam = { workspace = true, features = ["std"], optional = true }
 log = { workspace = true, optional = true }
 crabslab-derive = { version = "0.4.7", path = "../crabslab-derive" }
 snafu = { workspace = true , optional = true }
-
-[target.'cfg(not(target_arch = "spirv"))'.dependencies]
-glam = { workspace = true, features = ["std"], optional = true }
-
-[target.'cfg(target_arch = "spirv")'.dependencies]
-glam = { workspace = true, default-features = false, features = ["libm"], optional = true }
-spirv-std.workspace = true
+wgsl-rs.workspace = true
 
 [dev-dependencies]
 bytemuck.workspace = true
