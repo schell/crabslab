@@ -3,9 +3,9 @@
 //! [`Arena`] provides an API to dynamically allocate types that
 //! implement [`SlabItem`] from the CPU, and then synchronize those changes to the backend
 //! during [`Arena::commit`].
-//! [`Arena`] also provides synchronization _back_ from the backend using [`Arena::sychronize`].
-//! All values are set to synchronize from the backend by default and must be explicitly set
-//! to opt-out of synchronization with `TODO: add sync opt-out`.
+//! [`Arena`] also provides synchronization _back_ from the backend using [`Arena::synchronize`].
+//! All values synchronize from the backend by default; opt out with [`Value::into_sync_none`]
+//! or pick another direction with the other `into_*` methods.
 use std::{
     borrow::Cow,
     marker::PhantomData,
@@ -24,6 +24,8 @@ use crate::{
     Error, NoInternalBufferSnafu,
 };
 
+/// Marker for the sync directions whose values queue CPU edits for the
+/// GPU.
 pub trait CanUpdateFromCpu {}
 
 /// Value is automatically synchronized from CPU to GPU on commit and back on sync.
@@ -41,9 +43,18 @@ pub struct SyncOneWayFromGpu;
 /// Value is not updated.
 pub struct SyncNone;
 
+/// A RAII slab value.
+///
+/// A `Value<T>` is a handle to a `T` allocated on an [`Arena`]: it
+/// reads and edits the local CPU cache, queues edits for the GPU, and -
+/// depending on its sync direction - pulls GPU changes back into the
+/// cache during [`Arena::synchronize`].
+///
+/// The `Sync` type parameter selects the synchronization direction and
+/// defaults to [`SyncBidirectional`]; change it with the `into_*`
+/// methods.
 pub struct Value<T: ?Sized, Sync = SyncBidirectional> {
     update_source: CpuUpdateSource,
-    /// A channell to send updates into.
     _phantom: PhantomData<(Sync, T)>,
 }
 
@@ -218,11 +229,13 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
         })
     }
 
+    /// Modify the item at `index`, returning `None` if it is out of bounds.
     pub fn modify_item<X>(&self, index: usize, f: impl FnOnce(&mut T) -> X) -> Option<X> {
         (index < self.len()).then_some(())?;
         Some(self.modify_range(index..=index, |ts| f(&mut ts[0])))
     }
 
+    /// Read the item at `index`, returning `None` if it is out of bounds.
     pub fn read_item<X>(&self, index: usize, f: impl FnOnce(&T) -> X) -> Option<X> {
         (index < self.len()).then_some(())?;
         Some(self.read_range(index..=index, |ts| f(&ts[0])))
@@ -412,10 +425,10 @@ impl<R: IsRuntime> Arena<R> {
         Ok(output)
     }
 
-    /// Returns an iterator of [`SourceId`]s of all currently live [`Value`]s.
+    /// Returns an iterator of the `SourceId`s of all currently live [`Value`]s.
     ///
     /// ## Note
-    /// Keep in mind that the returned [`SourceId`]s are only valid until the next
+    /// Keep in mind that the returned ids are only valid until the next
     /// commit.
     pub fn get_live_source_ids(&self) -> impl Iterator<Item = SourceId> {
         self.update_manager.get_managed_source_ids().into_iter()

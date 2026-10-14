@@ -10,12 +10,12 @@ pub mod manager;
 /// A buffer of `u32`s.
 ///
 /// A thin wrapper around a buffer `T` that provides the ability to tell
-/// if the buffer has been invalidated by the [`SlabAllocator`] that it
+/// if the buffer has been invalidated by the [`Arena`](crate::arena::Arena) that it
 /// originated from.
 ///
 /// Invalidation happens when the slab resizes. For this reason it is
 /// important to create as many values as necessary _before_ calling
-/// [`SlabAllocator::commit`] to avoid unnecessary invalidation.
+/// [`Arena::commit`](crate::arena::Arena::commit) to avoid unnecessary invalidation.
 pub struct SlabBuffer<T> {
     // Id of the slab's last `commit` invocation.
     slab_commit_invocation_k: Arc<AtomicUsize>,

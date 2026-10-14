@@ -6,9 +6,15 @@ use crabslab::{Array, Id, SlabItem};
 
 use crate::update::{SourceId, Update};
 
+/// A range of `u32` slab slots, spanning `first_index..=last_index`.
+///
+/// A degenerate range - one where `last_index < first_index` - covers
+/// no slots.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Range {
+    /// The first slot in the range.
     pub first_index: u32,
+    /// The last slot in the range, inclusive.
     pub last_index: u32,
 }
 
@@ -108,6 +114,7 @@ impl<T> IndexMut<Range> for Vec<T> {
 }
 
 impl Range {
+    /// The number of slots the range covers.
     pub fn len(&self) -> u32 {
         if self.is_degenerate() {
             0
@@ -116,14 +123,18 @@ impl Range {
         }
     }
 
+    /// Returns `true` if the range covers no slots.
     pub fn is_empty(&self) -> bool {
         self.is_degenerate()
     }
 
+    /// Returns `true` if `last_index < first_index`, i.e. the range
+    /// covers no slots.
     pub fn is_degenerate(&self) -> bool {
         self.last_index < self.first_index
     }
 
+    /// Returns `true` if the two ranges share at least one slot.
     pub fn intersects(&self, other: &Range) -> bool {
         !self.is_degenerate()
             && self.first_index <= other.last_index
@@ -186,6 +197,8 @@ pub trait IsRange: Sized {
     /// Returns the union of two contiguous ranges.
     fn merge_with_right_neighbor(&mut self, rhs: Self);
 
+    /// Split the range at `n` slots from its start, returning the
+    /// right part.
     fn split_off(&mut self, n: u32) -> Self;
 
     /// Take the first `n` spaces from `self`, returning it as a new range.
@@ -207,6 +220,7 @@ pub trait IsRange: Sized {
         self.split_off(n)
     }
 
+    /// Merge a range fully contained in `self` back into it.
     fn merge_contained(&mut self, contained: Self);
 }
 
