@@ -27,3 +27,17 @@ jobs:
       run: cargo nextest run -j 1
       env: 
         RUST_BACKTRACE: 1
+
+  build-macos:
+
+    # macOS runners provide a real GPU (Metal), so the wgpu tests and the
+    # doctests (including the README examples, which are include_str!ed as
+    # crate docs) actually execute.
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Test
+      run: cargo test -- --test-threads=1
+      env:
+        RUST_BACKTRACE: 1
