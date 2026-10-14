@@ -31,3 +31,4 @@ futures-lite.workspace = true
 glam.workspace = true
 pretty_assertions.workspace = true
 proptest.workspace = true
+wgsl-rs.workspace = true
