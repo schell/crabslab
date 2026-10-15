@@ -403,6 +403,7 @@ impl<R: IsRuntime> Arena<R> {
         self.bump_allocator.get_buffer()
     }
 
+    /// Read every element of `array` back from the GPU. Test-only.
     #[cfg(test)]
     pub async fn read_slab<T: SlabItem + Clone>(
         &self,
