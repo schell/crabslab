@@ -62,11 +62,13 @@ One definition, two worlds: the CPU allocates a `Lamp` with
 [`Arena::new_value`], edits it with [`Value::modify`], and uploads it with
 [`Arena::commit`]. Then a `wgsl-rs` compute shader reads the lamp with
 `slab_read!`, adds `1.0` to its intensity, and writes it back with
-`slab_write!`.
+`slab_write!`. The wgpu pipeline objects are generated from the shader by
+[`wgsl-rs-linkage-wgpu`](https://crates.io/crates/wgsl-rs-linkage-wgpu).
 
 ```rust
 use craballoc::prelude::*;
 use wgsl_rs::wgsl;
+use wgsl_rs_linkage_wgpu::v29 as wgpu_linkage;
 
 #[wgsl(extensions = [crabslab::SlabItemExt])]
 mod lamp_shader {
@@ -120,48 +122,21 @@ lamp.modify(|lamp| lamp.intensity *= 2.0);
 // Upload the slab to a GPU buffer.
 let buffer = arena.commit();
 
-// Compile and dispatch the shader, binding the arena's buffer as its
-// storage slab.
-let module = runtime.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-    label: Some("lamp"),
-    source: wgpu::ShaderSource::Wgsl(
-        lamp_shader::WGSL_SOURCE.wgsl_source().unwrap().into(),
-    ),
-});
-let layout = runtime.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-    label: Some("lamp"),
-    entries: &[wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only: false },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    }],
-});
-let pipeline_layout = runtime.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-    label: Some("lamp"),
-    bind_group_layouts: &[Some(&layout)],
-    immediate_size: 0,
-});
+// Analyze the shader's linkage and build its wgpu pipeline objects,
+// binding the arena's buffer by the storage declaration's name.
+let mut linkage = wgpu_linkage::analyze_wgsl_module(&lamp_shader::WGSL_SOURCE).unwrap();
+let module = linkage.shader_module(&runtime.device);
 let pipeline = runtime.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
     label: Some("lamp"),
-    layout: Some(&pipeline_layout),
+    layout: Some(&linkage.pipeline_layout(&runtime.device, Some("lamp"))),
     module: &module,
     entry_point: Some("main"),
     compilation_options: Default::default(),
     cache: None,
 });
-let bind_group = runtime.device.create_bind_group(&wgpu::BindGroupDescriptor {
-    label: Some("lamp"),
-    layout: &layout,
-    entries: &[wgpu::BindGroupEntry {
-        binding: 0,
-        resource: buffer.as_entire_binding(),
-    }],
-});
+let bind_group = linkage
+    .create_bind_group_named(0, &runtime.device, &[("SLAB", buffer.as_entire_binding())])
+    .unwrap();
 let mut encoder = runtime.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
     label: Some("lamp"),
 });
