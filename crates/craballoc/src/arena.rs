@@ -111,7 +111,7 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
         }
     }
 
-    /// Sets whether or not this `Value` should sychronize its data from the GPU
+    /// Sets whether or not this `Value` should synchronize its data from the GPU
     /// when [`Arena::synchronize`] is called.
     ///
     /// If `should_sync` is `true`, this `Value` will synchronize.
@@ -263,8 +263,52 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
 
 /// An arena allocator backed by a `u32` slab.
 ///
-/// TODO: write about how values allocated from the arena can conditionally be
-/// synchronized from the CPU to the GPU and back.
+/// [`Arena`] hands out RAII [`Value`]s backed by one contiguous slab
+/// buffer. Each value owns a range of `u32` slots: reads and edits go
+/// through its local CPU cache, and the arena batches all communication
+/// with the GPU.
+///
+/// The lifecycle:
+///
+/// 1. Allocate with [`Arena::new_value`] or [`Arena::new_array`] to get
+///    a [`Value<T>`] or a `Value<[T]>`. Values are RAII: when the last
+///    handle to a value drops, its slab range is reclaimed into the
+///    recycle pool on the next commit.
+/// 2. Read and edit the value locally with [`Value::get`], [`Value::set`],
+///    and [`Value::modify`]. Edits are queued, not sent immediately.
+/// 3. Once per frame (or more, or less), [`Arena::commit`] uploads every
+///    queued CPU edit to the GPU in a single pass.
+/// 4. [`Arena::synchronize`] copies the ranges of values registered for
+///    GPU sync back into their CPU caches, so [`Value::get`] sees
+///    GPU-side changes.
+///
+/// # Conditional synchronization
+///
+/// Which directions a value synchronizes is part of its type. Values
+/// start out [`SyncBidirectional`] - CPU edits go up on commit and GPU
+/// changes come back down on synchronize - and each can switch direction
+/// at any time with the `into_*` methods:
+///
+/// * [`Value::into_bidirectional`] synchronizes both ways (the default).
+///   CPU-side edits are queued for commit, and GPU changes are read back
+///   on synchronize.
+/// * [`Value::into_one_way_from_cpu`] uploads CPU edits on commit, but
+///   GPU changes are not read back.
+/// * [`Value::into_one_way_from_gpu`] reads GPU changes back on
+///   synchronize, but the CPU-side edit methods
+///   ([`Value::modify`], [`Value::set`]) are unavailable for it;
+///   convert back with [`Value::into_bidirectional`] to edit or read
+///   the value CPU-side.
+/// * [`Value::into_sync_none`] synchronizes neither way; the value only
+///   occupies its slab range.
+///
+/// ## Buffer invalidation
+///
+/// The slab buffer grows on demand, and growing it invalidates
+/// previously returned [`SlabBuffer`]s. Create the values you need
+/// _before_ calling [`Arena::commit`] to avoid unnecessary invalidation.
+///
+/// See the crate documentation for a complete end-to-end example.
 pub struct Arena<R: IsRuntime> {
     /// Manages bump allocation on the slab.
     bump_allocator: BumpAllocator<R>,
