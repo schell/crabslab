@@ -20,6 +20,35 @@ use crate::{
 mod wgpu;
 
 #[test]
+fn sync_direction_change_requires_sole_handle() {
+    use crate::Error;
+
+    let arena = Arena::new(&CpuRuntime, "sync-direction", None);
+
+    // A unique handle may switch direction, back and forth.
+    let value = arena.new_value(666u32);
+    let value = value.into_one_way_from_cpu().expect("unique handle");
+    let value = value.into_bidirectional().expect("unique handle");
+    assert_eq!(666u32, value.get());
+
+    // While clones exist, switching fails and returns the original.
+    let value = arena.new_value(0u32);
+    let clone = value.clone();
+    let original = value.into_one_way_from_cpu().expect_err("clones exist");
+    // The returned original still works.
+    assert_eq!(0u32, original.get());
+    let _ = clone;
+
+    // `set_gpu_sync` fails the same way, with the crate error.
+    let value = arena.new_value(1u32);
+    let _clone = value.clone();
+    assert!(matches!(
+        value.set_gpu_sync(false),
+        Err(Error::SyncChangeWithClones)
+    ));
+}
+
+#[test]
 fn mngr_updates_count_sanity() {
     let slab = Arena::new(&CpuRuntime, "sanity", None);
     assert!(

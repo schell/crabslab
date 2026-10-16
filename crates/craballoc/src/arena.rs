@@ -51,8 +51,10 @@ pub struct SyncNone;
 /// cache during [`Arena::synchronize`].
 ///
 /// The `Sync` type parameter selects the synchronization direction and
-/// defaults to [`SyncBidirectional`]; change it with the `into_*`
-/// methods.
+/// defaults to [`SyncBidirectional`]. Direction can only be changed
+/// through the value's sole live handle: the `into_*` methods fail
+/// while clones exist, returning the original, so every live handle's
+/// type always matches the arena's registration.
 pub struct Value<T: ?Sized, Sync = SyncBidirectional> {
     update_source: CpuUpdateSource,
     _phantom: PhantomData<(Sync, T)>,
@@ -71,44 +73,84 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
 
     /// Convert to bidirectional sync (CPU→GPU on commit, GPU→CPU on
     /// synchronize).
-    pub fn into_bidirectional(self) -> Value<T, SyncBidirectional> {
+    ///
+    /// # Errors
+    ///
+    /// Fails while other handles to this value exist, returning the
+    /// original value unchanged. Changing direction re-registers the
+    /// shared source, so it is only allowed through the value's sole
+    /// live handle.
+    pub fn into_bidirectional(self) -> Result<Value<T, SyncBidirectional>, Value<T, Sync>> {
+        if self.update_source.handle_count() != 1 {
+            return Err(self);
+        }
         self.update_source.set_gpu_sync(true);
-        Value {
+        Ok(Value {
             update_source: self.update_source,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Convert to one-way CPU→GPU sync. Changes made via [`Value::modify`]
     /// and [`Value::set`] are sent to the GPU on commit, but GPU changes
     /// are **not** read back on synchronize.
-    pub fn into_one_way_from_cpu(self) -> Value<T, SyncOneWayFromCpu> {
+    ///
+    /// # Errors
+    ///
+    /// Fails while other handles to this value exist, returning the
+    /// original value unchanged. Changing direction re-registers the
+    /// shared source, so it is only allowed through the value's sole
+    /// live handle.
+    pub fn into_one_way_from_cpu(self) -> Result<Value<T, SyncOneWayFromCpu>, Value<T, Sync>> {
+        if self.update_source.handle_count() != 1 {
+            return Err(self);
+        }
         self.update_source.set_gpu_sync(false);
-        Value {
+        Ok(Value {
             update_source: self.update_source,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Convert to one-way GPU→CPU sync. The GPU value is read back into
     /// the CPU cache on synchronize, but CPU-side modification methods
     /// ([`Value::modify`], [`Value::set`]) are not available.
-    pub fn into_one_way_from_gpu(self) -> Value<T, SyncOneWayFromGpu> {
+    ///
+    /// # Errors
+    ///
+    /// Fails while other handles to this value exist, returning the
+    /// original value unchanged. Changing direction re-registers the
+    /// shared source, so it is only allowed through the value's sole
+    /// live handle.
+    pub fn into_one_way_from_gpu(self) -> Result<Value<T, SyncOneWayFromGpu>, Value<T, Sync>> {
+        if self.update_source.handle_count() != 1 {
+            return Err(self);
+        }
         self.update_source.set_gpu_sync(true);
-        Value {
+        Ok(Value {
             update_source: self.update_source,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Convert to no sync. The value occupies slab space but is neither
     /// written to the GPU on commit nor read back on synchronize.
-    pub fn into_sync_none(self) -> Value<T, SyncNone> {
+    ///
+    /// # Errors
+    ///
+    /// Fails while other handles to this value exist, returning the
+    /// original value unchanged. Changing direction re-registers the
+    /// shared source, so it is only allowed through the value's sole
+    /// live handle.
+    pub fn into_sync_none(self) -> Result<Value<T, SyncNone>, Value<T, Sync>> {
+        if self.update_source.handle_count() != 1 {
+            return Err(self);
+        }
         self.update_source.set_gpu_sync(false);
-        Value {
+        Ok(Value {
             update_source: self.update_source,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Sets whether or not this `Value` should synchronize its data from the GPU
@@ -118,8 +160,18 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
     /// If `should_sync` is `false` this `Value` **will not** synchronize.
     ///
     /// Consider using one of the `into_*` functions instead.
-    pub fn set_gpu_sync(&self, should_sync: bool) {
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`Error::SyncChangeWithClones`] while other handles to
+    /// this value exist, since changing direction re-registers the shared
+    /// source.
+    pub fn set_gpu_sync(&self, should_sync: bool) -> Result<(), Error> {
+        if self.update_source.handle_count() != 1 {
+            return Err(Error::SyncChangeWithClones);
+        }
         self.update_source.set_gpu_sync(should_sync);
+        Ok(())
     }
 }
 
@@ -286,8 +338,10 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
 ///
 /// Which directions a value synchronizes is part of its type. Values
 /// start out [`SyncBidirectional`] - CPU edits go up on commit and GPU
-/// changes come back down on synchronize - and each can switch direction
-/// at any time with the `into_*` methods:
+/// changes come back down on synchronize. Direction is changed with the
+/// `into_*` methods, which only succeed on the value's sole live
+/// handle: while clones exist they fail and return the original, so
+/// every live handle's type stays truthful:
 ///
 /// * [`Value::into_bidirectional`] synchronizes both ways (the default).
 ///   CPU-side edits are queued for commit, and GPU changes are read back
@@ -587,20 +641,20 @@ mod test {
         assert_eq!(42, v.get());
 
         // Bidirectional → one-way-from-cpu: can still modify/get
-        let v = v.into_one_way_from_cpu();
+        let v = v.into_one_way_from_cpu().expect("unique handle");
         v.set(100);
         assert_eq!(100, v.get());
 
         // One-way-from-cpu → one-way-from-gpu: read slab_range still works
-        let v = v.into_one_way_from_gpu();
+        let v = v.into_one_way_from_gpu().expect("unique handle");
         assert_eq!(v.slab_range().len(), 1);
 
         // One-way-from-gpu → sync-none
-        let v = v.into_sync_none();
+        let v = v.into_sync_none().expect("unique handle");
         assert_eq!(v.slab_range().len(), 1);
 
         // Sync-none → back to bidirectional: can modify/get again
-        let v = v.into_bidirectional();
+        let v = v.into_bidirectional().expect("unique handle");
         v.set(200);
         assert_eq!(200, v.get());
     }

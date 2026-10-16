@@ -40,7 +40,9 @@ a [`Value<T>`] or a `Value<[T]>`:
   [`Value::modify`]; edits are queued automatically
 * choose a synchronization direction with [`Value::into_bidirectional`] (the
   default), [`Value::into_one_way_from_cpu`], [`Value::into_one_way_from_gpu`],
-  or [`Value::into_sync_none`]
+  or [`Value::into_sync_none`] - switching is only allowed through the value's
+  sole live handle; while clones exist the conversion fails and returns the
+  original
 
 Synchronize once per frame (or more, or less):
 

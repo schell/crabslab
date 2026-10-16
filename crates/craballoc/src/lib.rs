@@ -37,6 +37,11 @@ pub enum Error {
     #[snafu(display("Slab has no internal buffer. Please call Arena::commit first"))]
     NoInternalBuffer,
 
+    /// A `Value`'s sync direction cannot be changed while other handles
+    /// to it exist.
+    #[snafu(display("cannot change the sync direction of a Value while clones exist"))]
+    SyncChangeWithClones,
+
     /// An async channel receive error.
     #[snafu(display("Async recv error: {source}"))]
     AsyncRecv {
