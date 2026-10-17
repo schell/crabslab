@@ -3,9 +3,9 @@
 //! [`Arena`] provides an API to dynamically allocate types that
 //! implement [`SlabItem`] from the CPU, and then synchronize those changes to the backend
 //! during [`Arena::commit`].
-//! [`Arena`] also provides synchronization _back_ from the backend using [`Arena::sychronize`].
-//! All values are set to synchronize from the backend by default and must be explicitly set
-//! to opt-out of synchronization with `TODO: add sync opt-out`.
+//! [`Arena`] also provides synchronization _back_ from the backend using [`Arena::synchronize`].
+//! All values synchronize from the backend by default; opt out with [`Value::into_sync_none`]
+//! or pick another direction with the other `into_*` methods.
 use std::{
     borrow::Cow,
     marker::PhantomData,
@@ -24,6 +24,8 @@ use crate::{
     Error, NoInternalBufferSnafu,
 };
 
+/// Marker for the sync directions whose values queue CPU edits for the
+/// GPU.
 pub trait CanUpdateFromCpu {}
 
 /// Value is automatically synchronized from CPU to GPU on commit and back on sync.
@@ -41,9 +43,20 @@ pub struct SyncOneWayFromGpu;
 /// Value is not updated.
 pub struct SyncNone;
 
+/// A RAII slab value.
+///
+/// A `Value<T>` is a handle to a `T` allocated on an [`Arena`]: it
+/// reads and edits the local CPU cache, queues edits for the GPU, and -
+/// depending on its sync direction - pulls GPU changes back into the
+/// cache during [`Arena::synchronize`].
+///
+/// The `Sync` type parameter selects the synchronization direction and
+/// defaults to [`SyncBidirectional`]. Direction can only be changed
+/// through the value's sole live handle: the `into_*` methods fail
+/// while clones exist, returning the original, so every live handle's
+/// type always matches the arena's registration.
 pub struct Value<T: ?Sized, Sync = SyncBidirectional> {
     update_source: CpuUpdateSource,
-    /// A channell to send updates into.
     _phantom: PhantomData<(Sync, T)>,
 }
 
@@ -60,55 +73,105 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
 
     /// Convert to bidirectional sync (CPU→GPU on commit, GPU→CPU on
     /// synchronize).
-    pub fn into_bidirectional(self) -> Value<T, SyncBidirectional> {
+    ///
+    /// # Errors
+    ///
+    /// Fails while other handles to this value exist, returning the
+    /// original value unchanged. Changing direction re-registers the
+    /// shared source, so it is only allowed through the value's sole
+    /// live handle.
+    pub fn into_bidirectional(self) -> Result<Value<T, SyncBidirectional>, Value<T, Sync>> {
+        if self.update_source.handle_count() != 1 {
+            return Err(self);
+        }
         self.update_source.set_gpu_sync(true);
-        Value {
+        Ok(Value {
             update_source: self.update_source,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Convert to one-way CPU→GPU sync. Changes made via [`Value::modify`]
     /// and [`Value::set`] are sent to the GPU on commit, but GPU changes
     /// are **not** read back on synchronize.
-    pub fn into_one_way_from_cpu(self) -> Value<T, SyncOneWayFromCpu> {
+    ///
+    /// # Errors
+    ///
+    /// Fails while other handles to this value exist, returning the
+    /// original value unchanged. Changing direction re-registers the
+    /// shared source, so it is only allowed through the value's sole
+    /// live handle.
+    pub fn into_one_way_from_cpu(self) -> Result<Value<T, SyncOneWayFromCpu>, Value<T, Sync>> {
+        if self.update_source.handle_count() != 1 {
+            return Err(self);
+        }
         self.update_source.set_gpu_sync(false);
-        Value {
+        Ok(Value {
             update_source: self.update_source,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Convert to one-way GPU→CPU sync. The GPU value is read back into
     /// the CPU cache on synchronize, but CPU-side modification methods
     /// ([`Value::modify`], [`Value::set`]) are not available.
-    pub fn into_one_way_from_gpu(self) -> Value<T, SyncOneWayFromGpu> {
+    ///
+    /// # Errors
+    ///
+    /// Fails while other handles to this value exist, returning the
+    /// original value unchanged. Changing direction re-registers the
+    /// shared source, so it is only allowed through the value's sole
+    /// live handle.
+    pub fn into_one_way_from_gpu(self) -> Result<Value<T, SyncOneWayFromGpu>, Value<T, Sync>> {
+        if self.update_source.handle_count() != 1 {
+            return Err(self);
+        }
         self.update_source.set_gpu_sync(true);
-        Value {
+        Ok(Value {
             update_source: self.update_source,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Convert to no sync. The value occupies slab space but is neither
     /// written to the GPU on commit nor read back on synchronize.
-    pub fn into_sync_none(self) -> Value<T, SyncNone> {
+    ///
+    /// # Errors
+    ///
+    /// Fails while other handles to this value exist, returning the
+    /// original value unchanged. Changing direction re-registers the
+    /// shared source, so it is only allowed through the value's sole
+    /// live handle.
+    pub fn into_sync_none(self) -> Result<Value<T, SyncNone>, Value<T, Sync>> {
+        if self.update_source.handle_count() != 1 {
+            return Err(self);
+        }
         self.update_source.set_gpu_sync(false);
-        Value {
+        Ok(Value {
             update_source: self.update_source,
             _phantom: PhantomData,
-        }
+        })
     }
 
-    /// Sets whether or not this `Value` should sychronize its data from the GPU
+    /// Sets whether or not this `Value` should synchronize its data from the GPU
     /// when [`Arena::synchronize`] is called.
     ///
     /// If `should_sync` is `true`, this `Value` will synchronize.
     /// If `should_sync` is `false` this `Value` **will not** synchronize.
     ///
     /// Consider using one of the `into_*` functions instead.
-    pub fn set_gpu_sync(&self, should_sync: bool) {
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`Error::SyncChangeWithClones`] while other handles to
+    /// this value exist, since changing direction re-registers the shared
+    /// source.
+    pub fn set_gpu_sync(&self, should_sync: bool) -> Result<(), Error> {
+        if self.update_source.handle_count() != 1 {
+            return Err(Error::SyncChangeWithClones);
+        }
         self.update_source.set_gpu_sync(should_sync);
+        Ok(())
     }
 }
 
@@ -218,11 +281,13 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
         })
     }
 
+    /// Modify the item at `index`, returning `None` if it is out of bounds.
     pub fn modify_item<X>(&self, index: usize, f: impl FnOnce(&mut T) -> X) -> Option<X> {
         (index < self.len()).then_some(())?;
         Some(self.modify_range(index..=index, |ts| f(&mut ts[0])))
     }
 
+    /// Read the item at `index`, returning `None` if it is out of bounds.
     pub fn read_item<X>(&self, index: usize, f: impl FnOnce(&T) -> X) -> Option<X> {
         (index < self.len()).then_some(())?;
         Some(self.read_range(index..=index, |ts| f(&ts[0])))
@@ -250,8 +315,54 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
 
 /// An arena allocator backed by a `u32` slab.
 ///
-/// TODO: write about how values allocated from the arena can conditionally be
-/// synchronized from the CPU to the GPU and back.
+/// [`Arena`] hands out RAII [`Value`]s backed by one contiguous slab
+/// buffer. Each value owns a range of `u32` slots: reads and edits go
+/// through its local CPU cache, and the arena batches all communication
+/// with the GPU.
+///
+/// The lifecycle:
+///
+/// 1. Allocate with [`Arena::new_value`] or [`Arena::new_array`] to get
+///    a [`Value<T>`] or a `Value<[T]>`. Values are RAII: when the last
+///    handle to a value drops, its slab range is reclaimed into the
+///    recycle pool on the next commit.
+/// 2. Read and edit the value locally with [`Value::get`], [`Value::set`],
+///    and [`Value::modify`]. Edits are queued, not sent immediately.
+/// 3. Once per frame (or more, or less), [`Arena::commit`] uploads every
+///    queued CPU edit to the GPU in a single pass.
+/// 4. [`Arena::synchronize`] copies the ranges of values registered for
+///    GPU sync back into their CPU caches, so [`Value::get`] sees
+///    GPU-side changes.
+///
+/// # Conditional synchronization
+///
+/// Which directions a value synchronizes is part of its type. Values
+/// start out [`SyncBidirectional`] - CPU edits go up on commit and GPU
+/// changes come back down on synchronize. Direction is changed with the
+/// `into_*` methods, which only succeed on the value's sole live
+/// handle: while clones exist they fail and return the original, so
+/// every live handle's type stays truthful:
+///
+/// * [`Value::into_bidirectional`] synchronizes both ways (the default).
+///   CPU-side edits are queued for commit, and GPU changes are read back
+///   on synchronize.
+/// * [`Value::into_one_way_from_cpu`] uploads CPU edits on commit, but
+///   GPU changes are not read back.
+/// * [`Value::into_one_way_from_gpu`] reads GPU changes back on
+///   synchronize, but the CPU-side edit methods
+///   ([`Value::modify`], [`Value::set`]) are unavailable for it;
+///   convert back with [`Value::into_bidirectional`] to edit or read
+///   the value CPU-side.
+/// * [`Value::into_sync_none`] synchronizes neither way; the value only
+///   occupies its slab range.
+///
+/// ## Buffer invalidation
+///
+/// The slab buffer grows on demand, and growing it invalidates
+/// previously returned [`SlabBuffer`]s. Create the values you need
+/// _before_ calling [`Arena::commit`] to avoid unnecessary invalidation.
+///
+/// See the crate documentation for a complete end-to-end example.
 pub struct Arena<R: IsRuntime> {
     /// Manages bump allocation on the slab.
     bump_allocator: BumpAllocator<R>,
@@ -390,6 +501,7 @@ impl<R: IsRuntime> Arena<R> {
         self.bump_allocator.get_buffer()
     }
 
+    /// Read every element of `array` back from the GPU. Test-only.
     #[cfg(test)]
     pub async fn read_slab<T: SlabItem + Clone>(
         &self,
@@ -412,10 +524,10 @@ impl<R: IsRuntime> Arena<R> {
         Ok(output)
     }
 
-    /// Returns an iterator of [`SourceId`]s of all currently live [`Value`]s.
+    /// Returns an iterator of the `SourceId`s of all currently live [`Value`]s.
     ///
     /// ## Note
-    /// Keep in mind that the returned [`SourceId`]s are only valid until the next
+    /// Keep in mind that the returned ids are only valid until the next
     /// commit.
     pub fn get_live_source_ids(&self) -> impl Iterator<Item = SourceId> {
         self.update_manager.get_managed_source_ids().into_iter()
@@ -529,20 +641,20 @@ mod test {
         assert_eq!(42, v.get());
 
         // Bidirectional → one-way-from-cpu: can still modify/get
-        let v = v.into_one_way_from_cpu();
+        let v = v.into_one_way_from_cpu().expect("unique handle");
         v.set(100);
         assert_eq!(100, v.get());
 
         // One-way-from-cpu → one-way-from-gpu: read slab_range still works
-        let v = v.into_one_way_from_gpu();
+        let v = v.into_one_way_from_gpu().expect("unique handle");
         assert_eq!(v.slab_range().len(), 1);
 
         // One-way-from-gpu → sync-none
-        let v = v.into_sync_none();
+        let v = v.into_sync_none().expect("unique handle");
         assert_eq!(v.slab_range().len(), 1);
 
         // Sync-none → back to bidirectional: can modify/get again
-        let v = v.into_bidirectional();
+        let v = v.into_bidirectional().expect("unique handle");
         v.set(200);
         assert_eq!(200, v.get());
     }

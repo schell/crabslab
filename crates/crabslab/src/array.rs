@@ -46,7 +46,7 @@ impl<T: SlabItem> Iterator for ArrayIter<T> {
 pub struct Array<T> {
     /// Identifier of the first element in the array.
     pub id: Id<T>,
-    // number of `T` elements in the array
+    /// Number of `T` elements in the array.
     pub len: u32,
 }
 
@@ -108,24 +108,31 @@ impl<T: SlabItem> Default for Array<T> {
 }
 
 impl<T> Array<T> {
+    /// The non-array: no id, zero length. Analogous to `None`.
     pub const NONE: Self = Array::new(Id::NONE, 0);
 
+    /// Create a new array starting at `id` with `len` elements.
     pub const fn new(id: Id<T>, len: u32) -> Self {
         Self { id, len }
     }
 
+    /// The number of `T` elements in the array.
     pub fn len(&self) -> usize {
         self.len as usize
     }
 
+    /// Returns `true` if the array has no elements.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// Returns `true` if the array's [`Id`] is [`Id::NONE`].
     pub fn is_null(&self) -> bool {
         self.id.is_none()
     }
 
+    /// Returns the [`Id`] of the element at `index`, or [`Id::NONE`] if
+    /// the index is out of bounds.
     pub fn at(&self, index: usize) -> Id<T>
     where
         T: SlabItem,
@@ -137,10 +144,12 @@ impl<T> Array<T> {
         }
     }
 
+    /// The slab index of the array's first element.
     pub fn starting_index(&self) -> usize {
         self.id.index()
     }
 
+    /// Iterate over the [`Id`]s of the array's elements.
     pub fn iter(&self) -> ArrayIter<T> {
         ArrayIter {
             array: *self,
@@ -172,6 +181,7 @@ impl<T> Array<T> {
 }
 
 impl Array<u32> {
+    /// Extend this array's range to also cover `other`.
     pub fn union(&mut self, other: &Array<u32>) {
         let start = self.id.min(other.id);
         let end = (self.id.inner() + self.len).max(other.id.inner() + other.len);

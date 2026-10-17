@@ -2,6 +2,7 @@
 //!
 //! This crate provides [`Arena`] allocation backed by a `u32` slab.
 #![doc = include_str!("../README.md")]
+#![warn(missing_docs)]
 
 use snafu::prelude::*;
 
@@ -25,26 +26,51 @@ pub mod prelude {
 use prelude::crabslab::SlabItem;
 #[cfg(doc)]
 use prelude::*;
+#[cfg(doc)]
+use runtime::IsRuntime;
 
+/// Errors that can occur while synchronizing slab data.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+    /// The slab has no internal buffer. Please call [`Arena::commit`] first.
     #[snafu(display("Slab has no internal buffer. Please call Arena::commit first"))]
     NoInternalBuffer,
 
+    /// A `Value`'s sync direction cannot be changed while other handles
+    /// to it exist.
+    #[snafu(display("cannot change the sync direction of a Value while clones exist"))]
+    SyncChangeWithClones,
+
+    /// An async channel receive error.
     #[snafu(display("Async recv error: {source}"))]
-    AsyncRecv { source: async_channel::RecvError },
+    AsyncRecv {
+        /// The underlying receive error.
+        source: async_channel::RecvError,
+    },
 
     #[cfg(feature = "wgpu")]
+    /// An async buffer mapping error.
     #[snafu(display("Async error: {source}"))]
-    Async { source: wgpu::BufferAsyncError },
+    Async {
+        /// The underlying wgpu error.
+        source: wgpu::BufferAsyncError,
+    },
 
     #[cfg(feature = "wgpu")]
+    /// A device poll error.
     #[snafu(display("Poll error: {source}"))]
-    Poll { source: wgpu::PollError },
+    Poll {
+        /// The underlying wgpu error.
+        source: wgpu::PollError,
+    },
 
+    /// Another error.
     #[snafu(display("{source}"))]
-    Other { source: Box<dyn std::error::Error> },
+    Other {
+        /// The underlying error.
+        source: Box<dyn std::error::Error>,
+    },
 }
 
 #[cfg(all(test, feature = "wgpu"))]

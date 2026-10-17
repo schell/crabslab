@@ -6,7 +6,7 @@
 
 `crabslab` is a slab implementation focused on marshalling data between CPUs and GPUs.
 
-[See the example below](#example).
+[See the examples below](#examples).
 
 This project is funded through [NGI Zero Commons](https://nlnet.nl/commonsfund/), a fund established by [NLnet](https://nlnet.nl) 
 with financial support from the European Commission's [Next Generation Internet](https://ngi.eu) program. 
@@ -27,37 +27,53 @@ Working with a slab on the other hand, only requires that your types can be writ
 ### Opinion
 Working with _shaders_ is much easier using a slab.
 
-Shader code can be written in Rust with [`rust-gpu`](https://github.com/EmbarkStudios/rust-gpu),
-which will enable you to use this crate on both CPU and GPU code.
-
-### rust-gpu
-This crate was made to work with [`rust-gpu`](https://github.com/EmbarkStudios/rust-gpu/).
-Specifically, with this crate it is possible to pack your types into a buffer on the CPU
-and then read your types from the slab on the GPU (in Rust).
+Shader code can be written in Rust with [`wgsl-rs`](https://github.com/schell/wgsl-rs),
+which lets you use your Rust types in both CPU and GPU code. A single
+`#[derive(SlabItem)]` covers both worlds: the derive generates the CPU-side
+serialization, and the [`SlabItemExt`] extension generates the same serialization
+for `wgsl-rs` shader modules on the GPU.
 
 ### Other no-std platforms
-Even though this crate was written with `rust-gpu` in mind, it should work in other `no-std`
+Even though this crate was written with `wgsl-rs` in mind, it should work in other `no-std`
 contexts.
 
 ## And How
 The idea is simple - `crabslab` helps you manage a heap of contiguous `u32`s (roughly in the form of `Vec<u32>`). 
-Types implement the trait `SlabItem` which writes the type into an index of the slab as contiguous `u32`s and also 
-reads them out symmetrically. 
+Types implement the trait [`SlabItem`] which writes the type into an index of the slab as contiguous `u32`s and also 
+reads them out symmetrically.
 
 `crabslab` includes:
 * a few traits:
-  - `Slab`
-  - `GrowableSlab`
-  - `SlabItem`
-* a derive macro for `SlabItem` for your types
+  - [`Slab`]
+  - [`GrowableSlab`]
+  - [`SlabItem`]
+* a derive macro for [`SlabItem`] for your types
 * a few new structs for working with slabs
-  - `Id`
-  - `Array`
-  - `Offset`
-* a helper struct `CpuSlab` which wraps anything implementing `GrowableSlab`
-* feature for deriving `SlabItem` for `glam` types
+  - [`Id`]
+  - [`Array`]
+  - [`Offset`](offset::Offset)
+* a helper struct [`CpuSlab`] which wraps anything implementing [`GrowableSlab`]
+* the [`slab_item`] module, which holds the [`SlabItem`] trait definition, the
+  WGSL-expressible primitive impls, and the dual-world [`slab_read!`] /
+  [`slab_write!`] macros
+* [`SlabItemExt`], a `wgsl-rs` extension that generates the GPU-side serialization
+  from the same `#[derive(SlabItem)]`
+* the [`bits`] module, with utilities for tightly packing fields in manual
+  [`SlabItem`] implementations
+* a feature for deriving [`SlabItem`] for `glam` types
 
-# Example
+For a slab allocator with RAII values that keep themselves synchronized with the
+GPU, see the [`craballoc`](https://github.com/schell/crabslab/tree/main/crates/craballoc)
+crate, which is built on this one.
+
+## Features
+* `glam` (**on** by default) - implements [`SlabItem`] for [`glam`](https://docs.rs/glam) types
+* `futures-lite` (**on** by default) - enables the `futures-lite` dependency
+
+## Examples
+
+### CPU
+
 ```rust
 use crabslab::{CpuSlab, Slab, GrowableSlab, SlabItem, Id};
 use glam::{Vec3, Vec4};
@@ -100,6 +116,56 @@ fn shader_code(light_id: Id<Light>, slab: &[u32]) {
 let (light_id, slab) = cpu_code();
 // marshalling your data depends on which GPU library you are using...
 shader_code(light_id, &slab);
+```
+
+### One definition, two worlds
+
+Define your type once and derive `SlabItem` once. The CPU gets its serialization
+from the derive; inside a `wgsl-rs` module, [`SlabItemExt`] generates the same
+serialization for the GPU. The `#[wgsl]` module is plain Rust too, so this
+example runs on the CPU as-is:
+
+```rust
+use crabslab::{slab_read, slab_write, SlabItem};
+use wgsl_rs::wgsl;
+
+#[wgsl(extensions = [crabslab::SlabItemExt])]
+mod lamp_shader {
+    use crabslab::slab_item::*;
+    use wgsl_rs::std::*;
+
+    /// A lamp in the scene, shared between CPU and GPU code.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Wgsl, SlabItem)]
+    pub struct Lamp {
+        pub intensity: f32,
+        pub on: bool,
+    }
+
+    storage!(group(0), binding(0), read_write, SLAB: RuntimeArray<u32>);
+
+    #[compute]
+    #[workgroup_size(64)]
+    pub fn main(#[builtin(local_invocation_index)] _i: u32) {
+        let mut lamp: Lamp;
+        slab_read!(Lamp, get!(SLAB), 0u32, lamp);
+        lamp.intensity += 1.0;
+        slab_write!(Lamp, get_mut!(SLAB), 0u32, lamp);
+    }
+}
+
+// The `#[wgsl]` module is plain Rust, so the very same serialization
+// round-trips on the CPU, no GPU required:
+let lamp = lamp_shader::Lamp { intensity: 2.0, on: true };
+let mut slab = [0u32; lamp_shader::Lamp::SLAB_SIZE];
+slab_write!(lamp_shader::Lamp, slab, 0, lamp);
+let round_tripped: lamp_shader::Lamp;
+slab_read!(lamp_shader::Lamp, slab, 0, round_tripped);
+assert_eq!(lamp, round_tripped);
+
+// `WGSL_SOURCE` is the assembled shader source, complete with the
+// `SlabItemExt`-generated GPU-side serialization for `Lamp`:
+let source = lamp_shader::WGSL_SOURCE.wgsl_source().unwrap();
+assert!(source.contains("fn Lamp__1to_array("));
 ```
 
 ## 🫶 Sponsor this!

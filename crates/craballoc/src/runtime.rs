@@ -92,10 +92,12 @@ pub struct VecSlab {
 }
 
 impl VecSlab {
+    /// Read-only access to the slab's contents as a `Vec<u32>`.
     pub fn as_vec(&self) -> impl Deref<Target = Vec<u32>> + '_ {
         self.inner.read().unwrap()
     }
 
+    /// Mutable access to the slab's contents as a `Vec<u32>`.
     pub fn as_mut_vec(&self) -> impl DerefMut<Target = Vec<u32>> + '_ {
         self.inner.write().unwrap()
     }
@@ -150,7 +152,9 @@ impl IsRuntime for CpuRuntime {
 /// A slab allocation runtime that creates and updates [`wgpu::Buffer`]s.
 #[derive(Clone)]
 pub struct WgpuRuntime {
+    /// The device used to create buffers.
     pub device: Arc<wgpu::Device>,
+    /// The queue used to write and copy buffers.
     pub queue: Arc<wgpu::Queue>,
 }
 

@@ -121,6 +121,16 @@ impl CpuUpdateSource {
         self.source
     }
 
+    /// The number of live handles to this source.
+    ///
+    /// Each [`Value`](crate::arena::Value) holds one strong reference to
+    /// this source's shared CPU cache; the update manager and the
+    /// commit-time GPU-update snapshot hold only weak references, so the
+    /// strong count is exactly the number of live handles.
+    pub fn handle_count(&self) -> usize {
+        Arc::strong_count(&self.data)
+    }
+
     /// Read the inner data, if any, returning `T`.
     ///
     /// In the case this `CpuUpdateSource` represents a [`OneWayFromGpu`](crate::arena::OneWayFromGpu)

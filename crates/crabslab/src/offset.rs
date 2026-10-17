@@ -81,6 +81,7 @@ use crate::SlabItem;
 /// );
 /// ```
 pub struct Offset<F, T> {
+    /// The slab slot index this offset refers to.
     pub offset: u32,
     _phantom: PhantomData<(F, T)>,
 }
@@ -102,6 +103,7 @@ impl<F, T> From<Offset<F, T>> for Id<F> {
     }
 }
 impl<F, T> Offset<F, T> {
+    /// Create a new `Offset` from a slot index.
     pub const fn new(offset: usize) -> Self {
         Self {
             offset: offset as u32,
@@ -109,6 +111,7 @@ impl<F, T> Offset<F, T> {
         }
     }
 
+    /// The slab slot index of this offset.
     pub fn index(&self) -> usize {
         self.offset as usize
     }

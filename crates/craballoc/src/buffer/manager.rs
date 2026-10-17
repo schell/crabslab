@@ -80,6 +80,7 @@ impl<R: IsRuntime> Clone for BumpAllocator<R> {
 }
 
 impl<R: IsRuntime> BumpAllocator<R> {
+    /// Create a new buffer manager for `runtime`, with an empty buffer.
     pub fn new(
         runtime: &R,
         label: impl Into<Cow<'static, str>>,
@@ -105,6 +106,7 @@ impl<R: IsRuntime> BumpAllocator<R> {
         &self.runtime
     }
 
+    /// The managed buffer's current capacity, in `u32` slots.
     pub fn capacity(&self) -> u32 {
         *self.buffer_capacity.read().unwrap()
     }
@@ -116,6 +118,7 @@ impl<R: IsRuntime> BumpAllocator<R> {
         self.buffer_needs_expansion.swap(false, ATOMIC_ORDERING)
     }
 
+    /// Create a fresh buffer sized to the current capacity.
     pub fn create_buffer(&self, runtime: &R, label: &str) -> R::Buffer {
         log::trace!("creating a new buffer for {label}");
         let capacity = self.buffer_capacity.read().unwrap();
@@ -125,6 +128,7 @@ impl<R: IsRuntime> BumpAllocator<R> {
         buffer
     }
 
+    /// Wrap `new_buffer` in a [`SlabBuffer`] paired with this manager.
     pub fn create_slab_buffer(
         &self,
         new_buffer: R::Buffer,
@@ -192,12 +196,12 @@ impl<R: IsRuntime> BumpAllocator<R> {
 
     /// Returns the internal [`SlabBuffer`], if any.
     ///
-    /// Returns `None` before [`BufferManager::commit`] is called at least once.
+    /// Returns `None` before [`BumpAllocator::commit`] is called at least once.
     ///
     /// ## Note
     /// This returns the current internal buffer and does not commit any data
     /// awaiting synchronization. To ensure you have a buffer that contains
-    /// the latest data, use [`BufferManager::commit`].
+    /// the latest data, use [`BumpAllocator::commit`].
     pub fn get_buffer(&self) -> Option<SlabBuffer<R::Buffer>> {
         let guard = self.buffer.read().unwrap();
         guard.as_ref().cloned()

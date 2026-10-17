@@ -92,6 +92,12 @@ use std::borrow::Cow;
 use wgsl_rs::ir;
 use wgsl_rs::WgslExtension;
 
+/// The `WgslExtension` that gives `#[derive(SlabItem)]` structs their
+/// GPU-side serialization and lowers the `slab_read!`/`slab_write!`
+/// statement macros.
+///
+/// See the [module documentation](crate::slab_item_ext) for what it
+/// generates and why.
 pub struct SlabItemExt;
 
 impl WgslExtension for SlabItemExt {

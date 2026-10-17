@@ -61,6 +61,7 @@ pub trait Slab {
     /// Write the element at the given index, unchecked.
     fn write_at(&mut self, index: usize, element: u32);
 
+    /// Returns `true` if the slab has no elements.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -84,12 +85,16 @@ pub trait Slab {
     /// Read the type from the slab using the [`Id`] as the index.
     fn read_unchecked<T: SlabItem + Clone>(&self, id: Id<T>) -> T;
 
+    /// Read the type at `id` into `t`, if the id points at an item.
+    ///
+    /// Leaves `t` untouched if the id is [`Id::NONE`].
     fn read_into_if_some<T: SlabItem + Clone>(&self, id: Id<T>, t: &mut T) {
         if id.is_some() {
             *t = self.read_unchecked(id);
         }
     }
 
+    /// Read every element of `array` into a `Vec`.
     fn read_vec<T: SlabItem + Default + Clone>(&self, array: crate::array::Array<T>) -> Vec<T> {
         let mut vec = Vec::with_capacity(array.len());
         for i in 0..array.len() {
