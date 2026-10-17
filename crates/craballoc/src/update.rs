@@ -125,8 +125,12 @@ impl CpuUpdateSource {
     ///
     /// Each [`Value`](crate::arena::Value) holds one strong reference to
     /// this source's shared CPU cache; the update manager and the
-    /// commit-time GPU-update snapshot hold only weak references, so the
-    /// strong count is exactly the number of live handles.
+    /// commit-time GPU-update snapshot hold only weak references, so
+    /// while no commit or synchronize is running the strong count is
+    /// exactly the number of live handles. During commit-time
+    /// processing and update application those weak references are
+    /// briefly upgraded, so a concurrent call can over-count - the
+    /// direction guards then fail safe.
     pub fn handle_count(&self) -> usize {
         Arc::strong_count(&self.data)
     }
