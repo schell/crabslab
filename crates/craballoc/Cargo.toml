@@ -1,6 +1,6 @@
 [package]
 name = "craballoc"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Slab allocator with RAII, for synchronizing values between CPU and GPU"
 repository = "https://github.com/schell/crabslab"
