@@ -20,6 +20,7 @@ use crate::{
 mod wgpu;
 
 #[test]
+#[allow(deprecated)]
 fn sync_direction_change_requires_sole_handle() {
     use crate::Error;
 

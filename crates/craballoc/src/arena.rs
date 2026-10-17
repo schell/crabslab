@@ -54,7 +54,15 @@ pub struct SyncNone;
 /// defaults to [`SyncBidirectional`]. Direction can only be changed
 /// through the value's sole live handle: the `into_*` methods fail
 /// while clones exist, returning the original, so every live handle's
-/// type always matches the arena's registration.
+/// type always matches the arena's registration. (The deprecated
+/// [`Value::set_gpu_sync`] escape hatch predates the typed API and can
+/// still flip the registration without changing the type.)
+///
+/// The uniqueness check is best-effort and assumes single-threaded use:
+/// a `clone()` racing the check from another thread can slip through,
+/// and a commit or synchronize in progress briefly holds extra strong
+/// references, so the count can over-report - the guard then fails
+/// safe, refusing an otherwise valid conversion.
 pub struct Value<T: ?Sized, Sync = SyncBidirectional> {
     update_source: CpuUpdateSource,
     _phantom: PhantomData<(Sync, T)>,
@@ -166,6 +174,10 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
     /// Fails with [`Error::SyncChangeWithClones`] while other handles to
     /// this value exist, since changing direction re-registers the shared
     /// source.
+    #[deprecated(
+        since = "0.5.0",
+        note = "use one of the `into_*` methods, which keep the `Sync` type parameter and the arena's registration in agreement; this escape hatch flips the registration without changing the type"
+    )]
     pub fn set_gpu_sync(&self, should_sync: bool) -> Result<(), Error> {
         if self.update_source.handle_count() != 1 {
             return Err(Error::SyncChangeWithClones);
@@ -341,7 +353,8 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
 /// changes come back down on synchronize. Direction is changed with the
 /// `into_*` methods, which only succeed on the value's sole live
 /// handle: while clones exist they fail and return the original, so
-/// every live handle's type stays truthful:
+/// every live handle's type stays truthful (the deprecated
+/// [`Value::set_gpu_sync`] escape hatch excepted):
 ///
 /// * [`Value::into_bidirectional`] synchronizes both ways (the default).
 ///   CPU-side edits are queued for commit, and GPU changes are read back
