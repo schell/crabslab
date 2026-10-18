@@ -168,6 +168,73 @@ let source = lamp_shader::WGSL_SOURCE.wgsl_source().unwrap();
 assert!(source.contains("fn Lamp__1to_array("));
 ```
 
+## Two crabslab versions in one dependency graph
+
+During a transition (for example porting a renderer from the rust-gpu
+`0.6.x` line to the wgsl-rs `0.7.x` line) one crate may need both runtimes
+side by side. Cargo allows this because the versions are
+semver-incompatible, and the same must hold for the derive: Cargo unifies
+semver-compatible `crabslab-derive` versions into a single macro node, so
+`crabslab-derive` jumped to `0.7.0` in lockstep with `crabslab` 0.7.1.
+The old runtime keeps its own `0.4.x` macro node; the new runtime
+re-exports the rename-aware `0.7.0`.
+
+Two details need care in the manifest:
+
+```toml
+[dependencies]
+# published 0.6.x, renamed
+crabslab_old = { package = "crabslab", version = "0.6.6" }
+# wgsl-rs-integrated 0.7.x, renamed
+crabslab_wgsl = { package = "crabslab", version = "0.7.1" }
+
+# REQUIRED pin, unused in code: crabslab 0.6.6 requires
+# crabslab-derive ^0.4.6, which otherwise resolves to 0.4.7; 0.4.7
+# removed `impl_slabitem_tuples!`, which 0.6.6 still calls. A fresh
+# resolve of 0.6.6 does not compile without this pin.
+crabslab-derive = "=0.4.6"
+```
+
+Each derive then finds its own runtime. The new `0.7.0` derive resolves
+the dependency rename automatically, but when both versions are listed
+the automatic resolution is order-dependent (the last definition in the
+manifest wins), so name the runtime explicitly:
+
+```rust,ignore
+use crabslab_wgsl::SlabItem;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+#[slab(crate = "crabslab_wgsl")]
+struct Camera {
+    view_transform: [f32; 16],
+    fov_y: f32,
+}
+```
+
+The published `0.4.x` derive cannot be retargeted: it always generates
+paths through the name `crabslab`. Types meant for the old runtime alias
+that name to the old runtime for one module:
+
+```rust,ignore
+mod legacy {
+    use crabslab_old as crabslab;
+    use crabslab_old::SlabItem;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
+    pub struct Light {
+        pub position: [u32; 3],
+        pub intensity: u32,
+    }
+}
+```
+
+If the old dependency can stay un-renamed (as in renderling's setup:
+`crabslab = "0.6.6"` plus a renamed `crabslab_wgsl`), the alias is not
+needed; old types derive through the un-renamed name directly.
+
+A complete, tested version of this recipe lives in
+[`crabslab-test-two-versions`](https://github.com/schell/crabslab/tree/main/crates/crabslab-test-two-versions).
+
 ## 🫶 Sponsor this!
 
 This work will always be free and open source. 
