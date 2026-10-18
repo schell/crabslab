@@ -1,6 +1,6 @@
 [package]
 name = "crabslab"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "Slab implementation focused on marshalling data between CPUs and GPUs"
 repository = "https://github.com/schell/crabslab"
@@ -22,7 +22,7 @@ bytemuck = { workspace = true, optional = true }
 futures-lite = { workspace = true, optional = true }
 glam = { workspace = true, features = ["std"], optional = true }
 log = { workspace = true, optional = true }
-crabslab-derive = { version = "0.4.7", path = "../crabslab-derive" }
+crabslab-derive = { version = "0.7.0", path = "../crabslab-derive" }
 snafu = { workspace = true , optional = true }
 wgsl-rs.workspace = true
 
