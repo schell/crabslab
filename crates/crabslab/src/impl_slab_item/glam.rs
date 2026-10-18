@@ -1,9 +1,8 @@
 //! CPU-only `SlabItem` impls for glam types, enabled by the `glam` feature.
 //!
 //! These are plain-Rust impls outside any `#[wgsl]` module: glam types are
-//! CPU-side only. When wgsl-rs std vector/matrix impls land
-//! ([7iu.1.6](#beads/schell-7iu.1.6)) they will cover the GPU side, and these
-//! glam impls stay for downstream compatibility.
+//! CPU-side only. When wgsl-rs std vector/matrix impls land they will cover
+//! the GPU side, and these glam impls stay for downstream compatibility.
 use glam::{Mat4, Quat, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 
 use crate::SlabItem;

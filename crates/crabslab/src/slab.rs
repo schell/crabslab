@@ -4,8 +4,7 @@ use core::default::Default;
 pub use crate::SlabItem;
 use crate::{array::Array, id::Id};
 
-/// CPU-side slab I/O for [`SlabItem`]s (the A' decision from
-/// [7iu.1.9](#beads/schell-7iu.1.9)).
+/// CPU-side slab I/O for [`SlabItem`]s.
 ///
 /// The transpiled [`SlabItem`] trait stays minimal so it can live inside a
 /// `#[wgsl]` module; whole-value slab reads and writes live here instead,
