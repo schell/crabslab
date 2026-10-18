@@ -10,11 +10,91 @@
 //! Types that go through slab I/O (`CpuSlabItem`) must also implement
 //! `Clone`, because `to_array` takes the value by value (WGSL has no
 //! references).
+//!
+//! # Two crabslab versions in one dependency graph
+//!
+//! The generated impl targets the crabslab runtime crate that the
+//! *consuming* crate sees. Resolution order:
+//!
+//! 1. `#[slab(crate = "...")]` on the derived type (serde's
+//!    `#[serde(crate = "...")]` precedent). The path is emitted verbatim,
+//!    so it may name a renamed dependency (`crabslab_wgsl`), an absolute
+//!    path (`::crabslab_wgsl`), or any re-export path
+//!    (`crate::shims::crabslab`). This is the deterministic choice when
+//!    one dependency graph carries two crabslab versions, one of them
+//!    renamed, because automatic resolution is then order-dependent.
+//! 2. The consuming crate's dependency rename, found at expansion time
+//!    via `proc-macro-crate`.
+//! 3. The name `crabslab`. Also correct inside crabslab itself, which
+//!    declares `extern crate self as crabslab`.
 use quote::quote;
 use syn::{
     spanned::Spanned, Data, DataEnum, DataStruct, DeriveInput, Fields, FieldsNamed, FieldsUnnamed,
     Ident, Index, Type, WherePredicate,
 };
+
+/// Resolve the crabslab runtime crate that generated code must target.
+///
+/// See the crate docs for the resolution order and its rationale.
+fn resolve_krate(input: &DeriveInput) -> syn::Result<syn::Path> {
+    if let Some(path) = parse_slab_crate_attr(input)? {
+        return Ok(path);
+    }
+    match proc_macro_crate::crate_name("crabslab") {
+        Ok(proc_macro_crate::FoundCrate::Name(name)) => {
+            // `proc-macro-crate` sanitizes the name into a valid Rust
+            // identifier, so it is safe to turn into an `Ident` directly.
+            let ident = Ident::new(&name, proc_macro2::Span::call_site());
+            Ok(syn::parse_quote!(#ident))
+        }
+        // `Itself` (the consumer IS crabslab) and lookup errors both fall
+        // through to the default: crabslab re-exposes itself under the
+        // name `crabslab`, so the default resolves in every context that
+        // can reach this code.
+        _ => Ok(syn::parse_quote!(crabslab)),
+    }
+}
+
+/// Parse the `#[slab(crate = "...")]` override, if present.
+///
+/// Returns `Ok(None)` when the attribute is absent. Malformed input
+/// surfaces as a spanned `syn::Error` at the derive site.
+fn parse_slab_crate_attr(input: &DeriveInput) -> syn::Result<Option<syn::Path>> {
+    let mut krate: Option<syn::Path> = None;
+    for attr in &input.attrs {
+        if !attr.path().is_ident("slab") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if !meta.path.is_ident("crate") {
+                return Err(syn::Error::new(
+                    meta.path.span(),
+                    "unknown `#[slab]` setting; only `crate` is supported",
+                ));
+            }
+            let value = meta.value()?;
+            let lit: syn::LitStr = value.parse()?;
+            if krate.is_some() {
+                return Err(syn::Error::new(
+                    lit.span(),
+                    "duplicate `crate` entry; the runtime crate can only be named once",
+                ));
+            }
+            let path: syn::Path = lit.parse().map_err(|_| {
+                syn::Error::new(
+                    lit.span(),
+                    format!(
+                        "expected a path to the runtime crate, like `crabslab_wgsl` or `::crabslab_wgsl`; got `{}`",
+                        lit.value()
+                    ),
+                )
+            })?;
+            krate = Some(path);
+            Ok(())
+        })?;
+    }
+    Ok(krate)
+}
 
 enum FieldName {
     Index(Index),
@@ -83,29 +163,33 @@ impl FieldTy {
     }
 
     /// The const expression this field contributes to `SLAB_SIZE`.
-    fn size_expr(&self) -> proc_macro2::TokenStream {
+    fn size_expr(&self, krate: &syn::Path) -> proc_macro2::TokenStream {
         let item_ty = self.slab_item_ty();
         match self {
-            FieldTy::Plain(_) => quote! { <#item_ty as crabslab::SlabItem>::SLAB_SIZE },
+            FieldTy::Plain(_) => quote! { <#item_ty as #krate::SlabItem>::SLAB_SIZE },
             FieldTy::Array { len, .. } => {
-                quote! { #len * <#item_ty as crabslab::SlabItem>::SLAB_SIZE }
+                quote! { #len * <#item_ty as #krate::SlabItem>::SLAB_SIZE }
             }
         }
     }
 
     /// Statements writing the field into `__dest`, starting at and
     /// advancing the running index `__i`.
-    fn write_stmts(&self, access: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    fn write_stmts(
+        &self,
+        krate: &syn::Path,
+        access: proc_macro2::TokenStream,
+    ) -> proc_macro2::TokenStream {
         let item_ty = self.slab_item_ty();
         let dest = quote! { AsMut::<[u32]>::as_mut(&mut __dest) };
         match self {
             FieldTy::Plain(_) => {
                 let src = quote! { to_array(#access) };
-                field_write_stmts(item_ty, src, dest)
+                field_write_stmts(krate, item_ty, src, dest)
             }
             FieldTy::Array { .. } => {
                 let src = quote! { to_array(__element) };
-                let inner = field_write_stmts(item_ty, src, dest);
+                let inner = field_write_stmts(krate, item_ty, src, dest);
                 // `IntoIter::new` iterates by value in every edition (a
                 // bare `into_iter()` on arrays is edition-dependent).
                 quote! {
@@ -119,17 +203,17 @@ impl FieldTy {
 
     /// Statements reading the field from `__slab`, starting at and
     /// advancing the running index `__i`, binding the value to `var`.
-    fn read_stmts(&self, var: Ident) -> proc_macro2::TokenStream {
+    fn read_stmts(&self, krate: &syn::Path, var: Ident) -> proc_macro2::TokenStream {
         let item_ty = self.slab_item_ty();
         let slab = quote! { AsRef::<[u32]>::as_ref(&__slab) };
         match self {
             FieldTy::Plain(_) => {
-                let mut stmts = field_read_stmts(item_ty, slab);
+                let mut stmts = field_read_stmts(krate, item_ty, slab);
                 stmts.extend(quote! { let #var = __field; });
                 stmts
             }
             FieldTy::Array { .. } => {
-                let inner = field_read_stmts(item_ty, slab);
+                let inner = field_read_stmts(krate, item_ty, slab);
                 quote! {
                     let #var = ::core::array::from_fn(|_| {
                         #inner
@@ -223,7 +307,7 @@ struct EnumParams {
     slab_size: proc_macro2::TokenStream,
 }
 
-fn get_enum_params(de: &DataEnum) -> syn::Result<EnumParams> {
+fn get_enum_params(krate: &syn::Path, de: &DataEnum) -> syn::Result<EnumParams> {
     let DataEnum {
         enum_token: _,
         brace_token: _,
@@ -257,13 +341,17 @@ fn get_enum_params(de: &DataEnum) -> syn::Result<EnumParams> {
     let slab_size_increments = variants
         .iter()
         .map(|variant| {
-            let size_exprs: Vec<_> = variant.infos.iter().map(|info| info.size_expr()).collect();
+            let size_exprs: Vec<_> = variant
+                .infos
+                .iter()
+                .map(|info| info.size_expr(krate))
+                .collect();
             if size_exprs.is_empty() {
                 quote! {}
             } else {
                 quote! {{
                     let __field_size = #( #size_exprs )+*;
-                    __size += crabslab::__saturating_sub(__field_size,__size);
+                    __size += #krate::__saturating_sub(__field_size,__size);
                 }}
             }
         })
@@ -286,10 +374,10 @@ enum Params {
     Enum(EnumParams),
 }
 
-fn get_params(input: &DeriveInput) -> syn::Result<Params> {
+fn get_params(krate: &syn::Path, input: &DeriveInput) -> syn::Result<Params> {
     match &input.data {
         Data::Struct(ds) => Ok(Params::Struct(get_struct_params(ds)?)),
-        Data::Enum(de) => Ok(Params::Enum(get_enum_params(de)?)),
+        Data::Enum(de) => Ok(Params::Enum(get_enum_params(krate, de)?)),
         _ => Err(syn::Error::new(
             input.span(),
             "deriving SlabItem does not support unions".to_string(),
@@ -304,13 +392,14 @@ fn get_params(input: &DeriveInput) -> syn::Result<Params> {
 /// the `Stmt::SlabCopy` loops the `SlabItemExt` extension generates on the
 /// GPU side. The caller must have declared the running index `__i`.
 fn field_write_stmts(
+    krate: &syn::Path,
     ty: &Type,
     src: proc_macro2::TokenStream,
     dest: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
-    let size = quote! { <#ty as crabslab::SlabItem>::SLAB_SIZE };
+    let size = quote! { <#ty as #krate::SlabItem>::SLAB_SIZE };
     quote! {
-        let __field_arr = <#ty as crabslab::SlabItem>::#src;
+        let __field_arr = <#ty as #krate::SlabItem>::#src;
         {
             let __src = AsRef::<[u32]>::as_ref(&__field_arr);
             for __j in 0..#size {
@@ -322,17 +411,21 @@ fn field_write_stmts(
 }
 
 /// Per-field copy loop mirroring `slab_copy!(slab, i, field_array, 0, SIZE)`.
-fn field_read_stmts(ty: &Type, offset: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    let size = quote! { <#ty as crabslab::SlabItem>::SLAB_SIZE };
+fn field_read_stmts(
+    krate: &syn::Path,
+    ty: &Type,
+    offset: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let size = quote! { <#ty as #krate::SlabItem>::SLAB_SIZE };
     quote! {
-        let mut __field_arr = <#ty as crabslab::SlabItem>::array_container();
+        let mut __field_arr = <#ty as #krate::SlabItem>::array_container();
         {
             let __dst = AsMut::<[u32]>::as_mut(&mut __field_arr);
             for __j in 0..#size {
                 __dst[__j] = #offset[__i + __j];
             }
         }
-        let __field = <#ty as crabslab::SlabItem>::from_array(__field_arr);
+        let __field = <#ty as #krate::SlabItem>::from_array(__field_arr);
         __i += #size;
     }
 }
@@ -397,7 +490,7 @@ fn field_read_stmts(ty: &Type, offset: proc_macro2::TokenStream) -> proc_macro2:
 /// assert_eq!(Baz::Three(3, 4), slab.read(three_id));
 /// assert_eq!(Baz::Four(Bar { a: 5 }), slab.read(four_id));
 /// ```
-#[proc_macro_derive(SlabItem, attributes(offsets))]
+#[proc_macro_derive(SlabItem, attributes(slab, offsets))]
 pub fn derive_from_slab(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: DeriveInput = syn::parse_macro_input!(input);
 
@@ -410,15 +503,22 @@ pub fn derive_from_slab(input: proc_macro::TokenStream) -> proc_macro::TokenStre
         }
     });
 
-    match get_params(&input) {
-        Ok(Params::Struct(p)) => derive_from_slab_struct(input, p, gen_offsets_span.is_some()),
+    let krate = match resolve_krate(&input) {
+        Ok(krate) => krate,
+        Err(err) => return err.into_compile_error().into(),
+    };
+
+    match get_params(&krate, &input) {
+        Ok(Params::Struct(p)) => {
+            derive_from_slab_struct(&krate, input, p, gen_offsets_span.is_some())
+        }
         Ok(Params::Enum(p)) => {
             if let Some(span) = gen_offsets_span {
                 syn::Error::new(span, "Deriving field offsets is not supported for enums")
                     .into_compile_error()
                     .into()
             } else {
-                derive_from_slab_enum(input, p)
+                derive_from_slab_enum(&krate, input, p)
             }
         }
         Err(e) => e.into_compile_error().into(),
@@ -443,7 +543,11 @@ fn array_items(
     }
 }
 
-fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::TokenStream {
+fn derive_from_slab_enum(
+    krate: &syn::Path,
+    input: DeriveInput,
+    params: EnumParams,
+) -> proc_macro::TokenStream {
     let EnumParams {
         variants,
         slab_size,
@@ -459,7 +563,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
     {
         let where_clause = generics.make_where_clause();
         for ty in field_tys.iter() {
-            let where_predicate: WherePredicate = syn::parse_quote!(#ty : crabslab::SlabItem);
+            let where_predicate: WherePredicate = syn::parse_quote!(#ty : #krate::SlabItem);
             where_clause.predicates.push(where_predicate);
         }
         // `from_array` falls back to `Default::default()` for unknown
@@ -493,7 +597,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
                 .infos
                 .iter()
                 .zip(field_vars.iter())
-                .map(|(info, var)| info.write_stmts(quote! { #var }))
+                .map(|(info, var)| info.write_stmts(krate, quote! { #var }))
                 .collect();
             // Only declare the running index when there are fields to walk.
             let index_decl = if variant.infos.is_empty() {
@@ -527,7 +631,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
                 .infos
                 .iter()
                 .zip(field_vars.iter())
-                .map(|(info, var)| info.read_stmts(var.clone()))
+                .map(|(info, var)| info.read_stmts(krate, var.clone()))
                 .collect();
             // Only declare the running index when there are fields to walk.
             let index_decl = if variant.infos.is_empty() {
@@ -552,7 +656,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
 
     let output = quote! {
         #[automatically_derived]
-        impl #impl_generics crabslab::SlabItem for #name #ty_generics #where_clause
+        impl #impl_generics #krate::SlabItem for #name #ty_generics #where_clause
         {
             const SLAB_SIZE: usize = #slab_size;
 
@@ -582,6 +686,7 @@ fn derive_from_slab_enum(input: DeriveInput, params: EnumParams) -> proc_macro::
 }
 
 fn derive_from_slab_struct(
+    krate: &syn::Path,
     input: DeriveInput,
     params: StructParams,
     // Whether to generate field offsets
@@ -604,7 +709,7 @@ fn derive_from_slab_struct(
         let where_clause = generics.make_where_clause();
         for info in infos.iter() {
             let ty = info.slab_item_ty();
-            let where_predicate: WherePredicate = syn::parse_quote!(#ty : crabslab::SlabItem);
+            let where_predicate: WherePredicate = syn::parse_quote!(#ty : #krate::SlabItem);
             where_clause.predicates.push(where_predicate);
         }
     }
@@ -612,7 +717,7 @@ fn derive_from_slab_struct(
 
     let n_fields = infos.len();
     let size_exprs: Vec<proc_macro2::TokenStream> =
-        infos.iter().map(|info| info.size_expr()).collect();
+        infos.iter().map(|info| info.size_expr(krate)).collect();
     let slab_size = if n_fields == 0 {
         quote! { 0usize }
     } else {
@@ -641,7 +746,7 @@ fn derive_from_slab_struct(
                 }
                 FieldName::Ident(f) => quote! { data.#f },
             };
-            info.write_stmts(access)
+            info.write_stmts(krate, access)
         })
         .collect();
 
@@ -650,7 +755,7 @@ fn derive_from_slab_struct(
         .zip(field_names.iter())
         .map(|(info, fname)| {
             let var = fname.var();
-            info.read_stmts(var)
+            info.read_stmts(krate, var)
         })
         .collect();
 
@@ -687,10 +792,10 @@ fn derive_from_slab_struct(
         // type, so adding the offset to an `Id` addresses the array's
         // first element.
         let offset_ty = info.slab_item_ty();
-        let field_size_expr = info.size_expr();
+        let field_size_expr = info.size_expr(krate);
         offsets.push(quote! {
-            pub const #offset_of_ident: crabslab::offset::Offset<#offset_ty, Self> = {
-                crabslab::offset::Offset::new(
+            pub const #offset_of_ident: #krate::offset::Offset<#offset_ty, Self> = {
+                #krate::offset::Offset::new(
                     #( #offset_size_exprs+)*
                     0
                 )
@@ -699,7 +804,7 @@ fn derive_from_slab_struct(
                 #field_size_expr
             };
         });
-        offset_size_exprs.push(info.size_expr());
+        offset_size_exprs.push(info.size_expr(krate));
     }
 
     let offsets_output = if gen_offsets {
@@ -716,7 +821,7 @@ fn derive_from_slab_struct(
 
     let output = quote! {
         #[automatically_derived]
-        impl #impl_generics crabslab::SlabItem for #name #ty_generics #where_clause
+        impl #impl_generics #krate::SlabItem for #name #ty_generics #where_clause
         {
             const SLAB_SIZE: usize = #slab_size;
 

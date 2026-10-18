@@ -1,0 +1,13 @@
+[package]
+name = "crabslab-test-renamed"
+version = "0.1.0"
+edition = "2021"
+description = "Exercises automatic rename resolution in the SlabItem derive"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# A lone RENAMED dependency: there is no `crabslab` name in scope, and the
+# derive in tests/ sets no `#[slab]` override. The rename-aware derive
+# must discover `crabslab_wgsl` on its own via proc-macro-crate.
+crabslab_wgsl = { package = "crabslab", version = "0.7.1", path = "../crabslab" }
