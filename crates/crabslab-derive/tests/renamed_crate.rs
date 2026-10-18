@@ -7,7 +7,7 @@
 //! generated impl must bind to the exact path the override names, not to
 //! the default `crabslab`. Binding against the wrong runtime *version*
 //! (two crabslabs in one graph) is proven by the dedicated two-version
-//! test crate; see the parent bead.
+//! test crate, `crabslab-test-two-versions`.
 
 mod crabslab_wgsl {
     pub use crabslab::*;

@@ -7,10 +7,11 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-# Both crabslab versions as RENAMED deps, mirroring renderling's M4a
-# setup: published 0.6.6 (rust-gpu / glam era) side by side with this
-# workspace's wgsl-rs-integrated 0.7.x. No un-renamed `crabslab` name is
-# in scope, so each derive must find its runtime explicitly.
+# Both crabslab versions as RENAMED deps, as renderling carries them
+# during its rust-gpu to wgsl-rs port: published 0.6.6 (glam era) side by
+# side with this workspace's wgsl-rs-integrated 0.7.x. No un-renamed
+# `crabslab` name is in scope, so each derive must find its runtime
+# explicitly.
 crabslab_old = { package = "crabslab", version = "0.6.6" }
 crabslab_wgsl = { package = "crabslab", version = "0.7.1", path = "../crabslab" }
 
