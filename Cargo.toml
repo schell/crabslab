@@ -5,6 +5,7 @@ members = [
     "crates/craballoc-test-wire-types",
     "crates/crabslab",
     "crates/crabslab-derive",
+    "crates/crabslab-test-two-versions",
 ]
 
 resolver = "2"

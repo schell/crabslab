@@ -1,0 +1,22 @@
+[package]
+name = "crabslab-test-two-versions"
+version = "0.1.0"
+edition = "2021"
+description = "Proves two crabslab versions can coexist in one dependency graph"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+# Both crabslab versions as RENAMED deps, mirroring renderling's M4a
+# setup: published 0.6.6 (rust-gpu / glam era) side by side with this
+# workspace's wgsl-rs-integrated 0.7.x. No un-renamed `crabslab` name is
+# in scope, so each derive must find its runtime explicitly.
+crabslab_old = { package = "crabslab", version = "0.6.6" }
+crabslab_wgsl = { package = "crabslab", version = "0.7.1", path = "../crabslab" }
+
+# Resolution pin, unused in code: crabslab 0.6.6 requires
+# `crabslab-derive ^0.4.6`, which otherwise resolves to 0.4.7; 0.4.7
+# removed `impl_slabitem_tuples!`, which 0.6.6 still calls, breaking
+# fresh resolves of the old runtime. Renderling's lockfile achieves the
+# same effect; this pin makes it explicit for fresh checkouts.
+crabslab-derive = "=0.4.6"
