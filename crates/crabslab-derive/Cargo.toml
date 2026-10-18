@@ -18,6 +18,7 @@ bench = false
 
 [dependencies]
 proc-macro2 = "^1.0"
+proc-macro-crate = { workspace = true }
 quote = "^1.0"
 syn = { version = "^2.0", features = ["extra-traits", "parsing"] }
 
