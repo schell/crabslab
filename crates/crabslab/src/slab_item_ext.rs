@@ -145,6 +145,16 @@ fn scalar_name(s: ir::ScalarType) -> String {
     .to_string()
 }
 
+/// The WGSL-side abbreviation for a scalar type.
+fn scalar_abbr(s: &ir::ScalarType) -> &'static str {
+    match s {
+        ir::ScalarType::I32 => "i",
+        ir::ScalarType::U32 => "u",
+        ir::ScalarType::F32 => "f",
+        ir::ScalarType::Bool => "b",
+    }
+}
+
 /// The type name whose mangled methods implement slab serialization for
 /// a field type: scalars serialize through the imported primitive impls,
 /// structs through their own generated (or imported) impls.
@@ -156,6 +166,15 @@ fn slab_item_type_name(ty: &ir::Type) -> String {
     match ty {
         ir::Type::Scalar(s) => scalar_name(*s),
         ir::Type::Struct { name, .. } => name.clone(),
+        ir::Type::Vector {
+            elements,
+            scalar_ty: Some(scalar_ty),
+        } => format!("vec{elements}{ty}", ty = scalar_abbr(scalar_ty)),
+        ir::Type::Matrix {
+            columns,
+            rows,
+            scalar_ty: Some(scalar_ty),
+        } => format!("mat{columns}x{rows}{}", scalar_abbr(scalar_ty)),
         other => panic!(
             "SlabItemExt: field type `{other}` is not a slab item; only \
              scalars, slab structs, and arrays of those are supported"
