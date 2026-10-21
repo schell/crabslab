@@ -151,6 +151,13 @@ impl IsRuntime for CpuRuntime {
         let mut guard = buffer.inner.lock().unwrap();
         log::trace!("writing to vec len:{}", guard.len());
         for SlabUpdate { array, elements } in updates {
+            // wgpu 30 validates write offsets even for zero-size writes, and empty
+            // GpuArrays queue a zero-size update at the null-array sentinel index.
+            // These updates are GPU no-ops, so skip them.
+            if array.is_null() || elements.is_empty() {
+                log::trace!("skipping null or zero-size update for {array:?}");
+                continue;
+            }
             log::trace!("array: {array:?} elements: {elements:?}");
             let slice = &mut guard[array.starting_index()..array.starting_index() + array.len()];
             slice.copy_from_slice(&elements);
@@ -194,6 +201,13 @@ impl IsRuntime for WgpuRuntime {
 
     fn buffer_write<U: Iterator<Item = SlabUpdate>>(&self, updates: U, buffer: &Self::Buffer) {
         for SlabUpdate { array, elements } in updates {
+            // wgpu 30 validates write offsets even for zero-size writes, and empty
+            // GpuArrays queue a zero-size update at the null-array sentinel index.
+            // These updates are GPU no-ops, so skip them.
+            if array.is_null() || elements.is_empty() {
+                log::trace!("skipping null or zero-size update for {array:?}");
+                continue;
+            }
             let offset = array.starting_index() as u64 * std::mem::size_of::<u32>() as u64;
             self.queue
                 .write_buffer(buffer, offset, bytemuck::cast_slice(&elements));
