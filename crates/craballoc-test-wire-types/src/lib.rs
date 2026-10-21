@@ -40,14 +40,14 @@ pub struct DataChange {
 impl core::fmt::Display for DataChange {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let (field, value) = match self.ty {
-            DataChangeTy::I => ("i", self.data.read_unchecked(Id::<u32>::ZERO).to_string()),
+            DataChangeTy::I => ("i", self.data.read_unchecked(Id::<u32>::zero()).to_string()),
             DataChangeTy::Float => (
                 "float",
-                self.data.read_unchecked(Id::<f32>::ZERO).to_string(),
+                self.data.read_unchecked(Id::<f32>::zero()).to_string(),
             ),
             DataChangeTy::Ints => (
                 "ints",
-                format!("{:?}", self.data.read_unchecked(Id::<Ints>::ZERO)),
+                format!("{:?}", self.data.read_unchecked(Id::<Ints>::zero())),
             ),
         };
         f.write_str(&format!("change {field} to {value}"))
@@ -60,7 +60,7 @@ impl DataChange {
             ty,
             ..Default::default()
         };
-        s.data.write(Id::ZERO, &value);
+        s.data.write(Id::zero(), &value);
         s
     }
     pub fn i(i: u32) -> Self {
@@ -84,13 +84,13 @@ impl DataChange {
     pub fn apply(&self, data: &mut Data) {
         match self.ty {
             DataChangeTy::I => {
-                data.i = self.data.read_unchecked(Id::<u32>::ZERO);
+                data.i = self.data.read_unchecked(Id::<u32>::zero());
             }
             DataChangeTy::Float => {
-                data.float = self.data.read_unchecked(Id::ZERO);
+                data.float = self.data.read_unchecked(Id::zero());
             }
             DataChangeTy::Ints => {
-                data.ints = self.data.read_unchecked(Id::<Ints>::ZERO);
+                data.ints = self.data.read_unchecked(Id::<Ints>::zero());
             }
         }
     }
@@ -130,8 +130,8 @@ pub struct AnyChangeId {
 impl Default for AnyChangeId {
     fn default() -> Self {
         AnyChangeId {
-            change_id: Id::NONE,
-            data_array: Array::NONE,
+            change_id: Id::none(),
+            data_array: Array::none(),
         }
     }
 }
@@ -205,7 +205,7 @@ impl ApplyDataChangeInvocation {
     }
 
     pub fn run(data_slab: &mut [u32], changes_slab: &[u32], global_id: glam::UVec3) {
-        let invocation: ApplyDataChangeInvocation = changes_slab.read_unchecked(Id::ZERO);
+        let invocation: ApplyDataChangeInvocation = changes_slab.read_unchecked(Id::zero());
         let index = Self::index(global_id);
         if index >= invocation.changes_ids.len() as u32 {
             invocation.increment_invocations_skipped(data_slab);

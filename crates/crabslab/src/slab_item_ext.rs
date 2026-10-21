@@ -155,6 +155,13 @@ fn scalar_abbr(s: &ir::ScalarType) -> &'static str {
     }
 }
 
+fn panic_slab_item_type<T>(other: &ir::Type) -> T {
+    panic!(
+        "SlabItemExt: field type `{other}` {other:#?} is not a slab item; only \
+             scalars, slab structs, and arrays of those are supported"
+    )
+}
+
 /// The type name whose mangled methods implement slab serialization for
 /// a field type: scalars serialize through the imported primitive impls,
 /// structs through their own generated (or imported) impls.
@@ -173,12 +180,12 @@ fn slab_item_type_name(ty: &ir::Type) -> String {
         ir::Type::Matrix {
             columns,
             rows,
-            scalar_ty: Some(scalar_ty),
-        } => format!("mat{columns}x{rows}{}", scalar_abbr(scalar_ty)),
-        other => panic!(
-            "SlabItemExt: field type `{other}` is not a slab item; only \
-             scalars, slab structs, and arrays of those are supported"
-        ),
+            scalar_ty,
+        } => {
+            let abbr = scalar_ty.as_ref().map(scalar_abbr).unwrap_or("f");
+            format!("mat{columns}x{rows}{abbr}")
+        }
+        other => panic_slab_item_type(other),
     }
 }
 
@@ -197,10 +204,33 @@ fn field_size_expr(ty: &ir::Type) -> ir::Expr {
             op: ir::BinOp::Mul,
             rhs: Box::new(field_size_expr(elem)),
         },
-        other => panic!(
-            "SlabItemExt: field type `{other}` is not a slab item; only \
-             scalars, slab structs, and arrays of those are supported"
-        ),
+        ir::Type::Vector {
+            elements,
+            scalar_ty: Some(_),
+        } => ir::Expr::Lit(ir::Lit::Int {
+            digits: format!("{elements}"),
+            suffix: "u".to_string(),
+        }),
+        ir::Type::Matrix {
+            columns,
+            rows,
+            scalar_ty: None,
+        } => {
+            let cols = ir::Expr::Lit(ir::Lit::Int {
+                digits: format!("{columns}"),
+                suffix: "u".to_string(),
+            });
+            let rows = ir::Expr::Lit(ir::Lit::Int {
+                digits: format!("{rows}"),
+                suffix: "u".to_string(),
+            });
+            ir::Expr::Binary {
+                lhs: Box::new(cols),
+                op: ir::BinOp::Mul,
+                rhs: Box::new(rows),
+            }
+        }
+        other => panic_slab_item_type(other),
     }
 }
 

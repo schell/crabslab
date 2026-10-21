@@ -88,13 +88,13 @@ pub struct Offset<F, T> {
 impl<F, T> core::ops::Add<Id<T>> for Offset<F, T> {
     type Output = Id<F>;
     fn add(self, rhs: Id<T>) -> Self::Output {
-        Id::new(self.offset + rhs.0)
+        Id::new(self.offset + rhs.index)
     }
 }
 impl<F, T> core::ops::Add<Offset<F, T>> for Id<T> {
     type Output = Id<F>;
     fn add(self, rhs: Offset<F, T>) -> Self::Output {
-        Id::new(self.0 + rhs.offset)
+        Id::new(self.index + rhs.offset)
     }
 }
 impl<F, T> From<Offset<F, T>> for Id<F> {

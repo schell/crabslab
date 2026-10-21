@@ -1,5 +1,5 @@
 //! A slab-allocated array.
-use crate::{id::Id, SlabItem};
+use crate::wgsl::{Id, SlabItem};
 
 /// Iterator over [`Id`]s in an [`Array`].
 #[derive(Clone, Copy)]
@@ -42,13 +42,7 @@ impl<T: SlabItem> Iterator for ArrayIter<T> {
 ///     assert_eq!(ints[i], value);
 /// }
 /// ```
-#[repr(C)]
-pub struct Array<T> {
-    /// Identifier of the first element in the array.
-    pub id: Id<T>,
-    /// Number of `T` elements in the array.
-    pub len: u32,
-}
+pub use crate::wgsl::Array;
 
 impl<T> Clone for Array<T> {
     fn clone(&self) -> Self {
@@ -84,38 +78,7 @@ impl<T> PartialEq for Array<T> {
     }
 }
 
-impl<T: SlabItem> SlabItem for Array<T> {
-    const SLAB_SIZE: usize = 2;
-    type Array = [u32; 2];
-
-    fn to_array(data: Self) -> Self::Array {
-        [data.id.0, data.len]
-    }
-
-    fn from_array(arr: Self::Array) -> Self {
-        Array::new(Id::new(arr[0]), arr[1])
-    }
-
-    fn array_container() -> Self::Array {
-        [0, 0]
-    }
-}
-
-impl<T: SlabItem> Default for Array<T> {
-    fn default() -> Self {
-        Array::NONE
-    }
-}
-
 impl<T> Array<T> {
-    /// The non-array: no id, zero length. Analogous to `None`.
-    pub const NONE: Self = Array::new(Id::NONE, 0);
-
-    /// Create a new array starting at `id` with `len` elements.
-    pub const fn new(id: Id<T>, len: u32) -> Self {
-        Self { id, len }
-    }
-
     /// The number of `T` elements in the array.
     pub fn len(&self) -> usize {
         self.len as usize
@@ -138,7 +101,7 @@ impl<T> Array<T> {
         T: SlabItem,
     {
         if index >= self.len() {
-            Id::NONE
+            Id::none()
         } else {
             Id::new(self.id.inner() + (T::SLAB_SIZE * index) as u32)
         }

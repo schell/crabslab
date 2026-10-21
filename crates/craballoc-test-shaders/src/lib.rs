@@ -14,7 +14,7 @@ use wgsl_rs::wgsl;
 
 #[wgsl(extensions = [crabslab::SlabItemExt])]
 pub mod apply_data_changes_shader {
-    use crabslab::slab_item::*;
+    use crabslab::*;
     use wgsl_rs::std::*;
 
     // ===== Wire-format mirrors =====

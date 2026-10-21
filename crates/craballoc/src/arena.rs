@@ -223,9 +223,9 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Syn
     /// Modify the inner value, queing an update to the GPU.
     pub fn modify<X>(&self, f: impl FnOnce(&mut T) -> X) -> X {
         self.update_source.modify(|data| {
-            let mut t = data.read(Id::<T>::ZERO);
+            let mut t = data.read(Id::<T>::zero());
             let x = f(&mut t);
-            data.write(Id::ZERO, &t);
+            data.write(Id::zero(), &t);
             x
         })
     }
@@ -238,7 +238,7 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Syn
     /// Get a copy of the value from the local CPU cache.
     pub fn get(&self) -> T {
         self.update_source
-            .read(|data| data.read_unchecked(Id::ZERO))
+            .read(|data| data.read_unchecked(Id::zero()))
     }
 }
 
@@ -274,7 +274,7 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
         };
 
         self.update_source.modify_range(range, |data| {
-            let array = Array::new(Id::ZERO, len);
+            let array = Array::new(Id::zero(), len);
             let mut s = data.read_vec(array);
             let x = f(&mut s);
             data.write_array(array, &s);
@@ -530,7 +530,7 @@ impl<R: IsRuntime> Arena<R> {
             .buffer_read(&buffer, buffer_len as usize, range)
             .await?;
         let mut output = vec![];
-        let output_array = Array::new(Id::<T>::ZERO, array.len);
+        let output_array = Array::new(Id::<T>::zero(), array.len);
         for id in output_array.iter() {
             output.push(data.read_unchecked(id));
         }

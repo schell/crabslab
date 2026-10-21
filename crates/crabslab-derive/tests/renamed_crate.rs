@@ -39,21 +39,6 @@ enum Shape {
     },
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
-#[slab(crate = "crabslab_wgsl")]
-#[offsets]
-struct WithOffsets {
-    a: u32,
-    b: [u32; 2],
-}
-
-// The offsets consts must reference the target path's `offset` module,
-// both in their own type and in the size expression.
-const _: () = {
-    let _offset_a: crabslab_wgsl::offset::Offset<u32, WithOffsets> = WithOffsets::OFFSET_OF_A;
-    let _size_b: usize = WithOffsets::SLAB_SIZE_OF_B;
-};
-
 #[test]
 fn retargeted_struct_round_trips() {
     assert_eq!(19, Camera::SLAB_SIZE);
@@ -85,12 +70,4 @@ fn retargeted_enum_round_trips() {
     };
     let id = slab.append(&cube);
     assert_eq!(cube, slab.read(id));
-}
-
-#[test]
-fn retargeted_offsets_match_field_layout() {
-    assert_eq!(0, WithOffsets::OFFSET_OF_A.index());
-    assert_eq!(1, WithOffsets::OFFSET_OF_B.index());
-    assert_eq!(2, WithOffsets::SLAB_SIZE_OF_B);
-    assert_eq!(3, WithOffsets::SLAB_SIZE);
 }

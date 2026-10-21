@@ -1,40 +1,5 @@
 //! Typed identifiers that can also be used as indices.
-use core::marker::PhantomData;
-
-use crate::SlabItem;
-
-/// `u32` value of an [`Id`] that does not point to any item.
-pub const ID_NONE: u32 = u32::MAX;
-
-/// A typed index into a slab.
-///
-/// `Id<T>` identifies a `T` stored at some slot of a slab: it wraps a
-/// `u32` slot index, and the `T` parameter keeps ids of different slab
-/// item types from being mixed up. Ids are plain values - they remain
-/// valid as long as the underlying slab slot does - and they implement
-/// [`SlabItem`] themselves, so ids can be stored in slabs too.
-///
-/// Slabs of `u32` support indexing directly with `Id<T>`: `slab[id]`
-/// yields the `&T` backed by the slot's `T::SLAB_SIZE` words.
-#[repr(transparent)]
-pub struct Id<T>(pub(crate) u32, PhantomData<T>);
-
-impl<T> SlabItem for Id<T> {
-    const SLAB_SIZE: usize = 1;
-    type Array = [u32; 1];
-
-    fn to_array(data: Self) -> Self::Array {
-        [data.0]
-    }
-
-    fn from_array(arr: Self::Array) -> Self {
-        Id::new(arr[0])
-    }
-
-    fn array_container() -> Self::Array {
-        [0]
-    }
-}
+use crate::wgsl::{Id, SlabItem};
 
 impl<T> PartialOrd for Id<T> {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
@@ -44,7 +9,7 @@ impl<T> PartialOrd for Id<T> {
 
 impl<T> Ord for Id<T> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.0.cmp(&other.0)
+        self.index.cmp(&other.index)
     }
 }
 
@@ -58,13 +23,13 @@ impl<T> Clone for Id<T> {
 
 impl<T> core::hash::Hash for Id<T> {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
+        self.index.hash(state);
     }
 }
 
 impl<T> PartialEq for Id<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        self.index == other.index
     }
 }
 
@@ -72,7 +37,7 @@ impl<T> Eq for Id<T> {}
 
 impl<T> From<Id<T>> for u32 {
     fn from(value: Id<T>) -> Self {
-        value.0
+        value.index
     }
 }
 
@@ -91,7 +56,7 @@ impl<T> From<u32> for Id<T> {
 /// `Id::NONE` is the default.
 impl<T> Default for Id<T> {
     fn default() -> Self {
-        Id::NONE
+        Id::none()
     }
 }
 
@@ -100,13 +65,13 @@ impl<T> core::fmt::Debug for Id<T> {
         if self.is_none() {
             f.write_fmt(core::format_args!(
                 "Id<{}>(null)",
-                &core::any::type_name::<T>(),
+                core::any::type_name::<T>(),
             ))
         } else {
             f.write_fmt(core::format_args!(
                 "Id<{}>({})",
-                &core::any::type_name::<T>(),
-                &self.0
+                core::any::type_name::<T>(),
+                self.index
             ))
         }
     }
@@ -116,7 +81,7 @@ impl<T> core::ops::Add<usize> for Id<T> {
     type Output = Self;
 
     fn add(self, rhs: usize) -> Self::Output {
-        Id::new(self.0 + rhs as u32)
+        Id::new(self.index + rhs as u32)
     }
 }
 
@@ -124,7 +89,7 @@ impl<T> core::ops::Add<Id<T>> for usize {
     type Output = Id<T>;
 
     fn add(self, rhs: Id<T>) -> Self::Output {
-        Id::new(self as u32 + rhs.0)
+        Id::new(self as u32 + rhs.index)
     }
 }
 
@@ -132,7 +97,7 @@ impl<T> core::ops::Add<u32> for Id<T> {
     type Output = Self;
 
     fn add(self, rhs: u32) -> Self::Output {
-        Id::new(self.0 + rhs)
+        Id::new(self.index + rhs)
     }
 }
 
@@ -140,7 +105,7 @@ impl<T> core::ops::Add<Id<T>> for u32 {
     type Output = Id<T>;
 
     fn add(self, rhs: Id<T>) -> Self::Output {
-        Id::new(self + rhs.0)
+        Id::new(self + rhs.index)
     }
 }
 
@@ -163,30 +128,33 @@ impl<T: SlabItem> core::ops::IndexMut<Id<T>> for [u32] {
 }
 
 impl<T> Id<T> {
-    /// The non-id. Analogous to `None::<Id>`.
-    pub const NONE: Self = Id::new(ID_NONE);
+    // /// The non-id. Analogous to `None::<Id>`.
+    // pub const NONE: Self = Id::new(ID_NONE);
 
-    /// An `Id` that points to the first slot on a slab.
-    pub const ZERO: Self = Id::new(0);
+    // /// An `Id` that points to the first slot on a slab.
+    // pub const ZERO: Self = Id::new(0);
 
-    /// Create an `Id` from a raw slot index.
-    pub const fn new(i: u32) -> Self {
-        Id(i, PhantomData)
-    }
+    // /// Create an `Id` from a raw slot index.
+    // pub const fn new(i: u32) -> Self {
+    //     Id {
+    //         index: i,
+    //         _phantom: PhantomData,
+    //     }
+    // }
 
     /// Convert this id into a usize for use as an index.
     pub fn index(&self) -> usize {
-        self.0 as usize
+        self.index as usize
     }
 
     /// The raw u32 value of this id.
     pub fn inner(&self) -> u32 {
-        self.0
+        self.index
     }
 
     /// Returns `true` if this is the non-id ([`Id::NONE`]).
     pub fn is_none(&self) -> bool {
-        *self == Id::NONE
+        *self == Id::none()
     }
 
     /// Returns `true` if this id points at an item.
@@ -205,13 +173,13 @@ impl<T: SlabItem> Id<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{self as crabslab};
-    use crabslab::{CpuSlabItem, SlabItem};
-    use glam::Vec3;
+    use crate::slab::{CpuSlabItem, SlabItem};
+    use wgsl_rs::std::{vec3f, Vec3f};
 
     #[test]
     fn id_size() {
         #[derive(SlabItem)]
+        #[slab(crate = "crate")]
         struct MyEntity {
             name: u32,
             age: f32,
@@ -239,10 +207,10 @@ mod test {
     #[test]
     fn index() {
         let mut slab = [0u32; 4];
-        let id = Id::<Vec3>::new(1);
+        let id = Id::<Vec3f>::new(1);
         {
             let zero = &slab[id];
-            assert_eq!(&Vec3::ZERO, zero);
+            assert_eq!(&vec3f(0.0, 0.0, 0.0), zero);
         }
 
         {
@@ -251,7 +219,7 @@ mod test {
         }
 
         let one = &slab[id];
-        assert_eq!(&Vec3::new(0.0, 1.0, 0.0), one);
+        assert_eq!(&vec3f(0.0, 1.0, 0.0), one);
     }
 
     #[test]

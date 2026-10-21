@@ -490,18 +490,9 @@ fn field_read_stmts(
 /// assert_eq!(Baz::Three(3, 4), slab.read(three_id));
 /// assert_eq!(Baz::Four(Bar { a: 5 }), slab.read(four_id));
 /// ```
-#[proc_macro_derive(SlabItem, attributes(slab, offsets))]
+#[proc_macro_derive(SlabItem, attributes(slab))]
 pub fn derive_from_slab(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: DeriveInput = syn::parse_macro_input!(input);
-
-    let gen_offsets_span = input.attrs.iter().find_map(|attr| {
-        let path = attr.path();
-        if path.is_ident("offsets") {
-            Some(path.span())
-        } else {
-            None
-        }
-    });
 
     let krate = match resolve_krate(&input) {
         Ok(krate) => krate,
@@ -509,18 +500,8 @@ pub fn derive_from_slab(input: proc_macro::TokenStream) -> proc_macro::TokenStre
     };
 
     match get_params(&krate, &input) {
-        Ok(Params::Struct(p)) => {
-            derive_from_slab_struct(&krate, input, p, gen_offsets_span.is_some())
-        }
-        Ok(Params::Enum(p)) => {
-            if let Some(span) = gen_offsets_span {
-                syn::Error::new(span, "Deriving field offsets is not supported for enums")
-                    .into_compile_error()
-                    .into()
-            } else {
-                derive_from_slab_enum(&krate, input, p)
-            }
-        }
+        Ok(Params::Struct(p)) => derive_from_slab_struct(&krate, input, p),
+        Ok(Params::Enum(p)) => derive_from_slab_enum(&krate, input, p),
         Err(e) => e.into_compile_error().into(),
     }
 }
@@ -689,8 +670,6 @@ fn derive_from_slab_struct(
     krate: &syn::Path,
     input: DeriveInput,
     params: StructParams,
-    // Whether to generate field offsets
-    gen_offsets: bool,
 ) -> proc_macro::TokenStream {
     let StructParams {
         fields: FieldParams {
@@ -807,18 +786,6 @@ fn derive_from_slab_struct(
         offset_size_exprs.push(info.size_expr(krate));
     }
 
-    let offsets_output = if gen_offsets {
-        quote! {
-            #[automatically_derived]
-            /// Offsets into the slab buffer for each field.
-            impl #impl_generics #name #ty_generics {
-                #(#offsets)*
-            }
-        }
-    } else {
-        quote! {}
-    };
-
     let output = quote! {
         #[automatically_derived]
         impl #impl_generics #krate::SlabItem for #name #ty_generics #where_clause
@@ -844,7 +811,6 @@ fn derive_from_slab_struct(
                 #construct
             }
         }
-        #offsets_output
     };
     output.into()
 }

@@ -1,8 +1,8 @@
 //! Slab traits.
 use core::default::Default;
 
-pub use crate::SlabItem;
-use crate::{array::Array, id::Id};
+pub use crate::wgsl::SlabItem;
+use crate::wgsl::{Array, Id};
 
 /// CPU-side slab I/O for [`SlabItem`]s.
 ///
@@ -152,7 +152,7 @@ impl Slab for [u32] {
     }
 
     fn read_unchecked<T: SlabItem + Clone>(&self, id: Id<T>) -> T {
-        T::read_slab(id.0 as usize, self)
+        T::read_slab(id.index as usize, self)
     }
 
     fn write_indexed<T: SlabItem + Clone>(&mut self, t: &T, index: usize) -> usize {
@@ -174,7 +174,7 @@ impl<const N: usize> Slab for [u32; N] {
     }
 
     fn read_unchecked<T: SlabItem + Clone>(&self, id: Id<T>) -> T {
-        T::read_slab(id.0 as usize, self)
+        T::read_slab(id.index as usize, self)
     }
 
     fn write_indexed<T: SlabItem + Clone>(&mut self, t: &T, index: usize) -> usize {
@@ -404,7 +404,7 @@ impl GrowableSlab for Vec<u32> {
 
 #[cfg(test)]
 mod test {
-    use glam::Vec4;
+    use wgsl_rs::std::{vec2f, vec4f, Vec2f, Vec4f};
 
     use crate::{self as crabslab, Array, CpuSlab, SlabItem};
 
@@ -412,9 +412,9 @@ mod test {
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
     struct Vertex {
-        position: Vec4,
-        color: Vec4,
-        uv: glam::Vec2,
+        position: Vec4f,
+        color: Vec4f,
+        uv: Vec2f,
     }
 
     #[test]
@@ -453,7 +453,7 @@ mod test {
         let mut slab = [0u32; 16];
         slab.write_indexed(&42, 0);
         slab.write_indexed(&666, 1);
-        let t: Vec<u32> = slab.read_vec(Array::new(Id::ZERO, 2));
+        let t: Vec<u32> = slab.read_vec(Array::new(Id::zero(), 2));
         assert_eq!([42, 666], t[..]);
         slab.write_indexed_slice(&[1, 2, 3, 4], 2);
         let t: Vec<u32> = slab.read_vec(Array::new(Id::new(2), 4));
@@ -464,7 +464,7 @@ mod test {
         let floats = [1.0_f32, 2.0, 3.0, 4.0, 5.5, 6.5, 7.5, 8.5];
         slab.write_indexed_slice(&floats, 0);
 
-        let arr = Array::<f32>::new(Id::ZERO, 8);
+        let arr = Array::<f32>::new(Id::zero(), 8);
         assert_eq!(Id::new(0), arr.at(0));
         assert_eq!(Id::new(7), arr.at(7));
         assert_eq!(1.0, slab.read(arr.at(0)));
@@ -473,33 +473,33 @@ mod test {
 
         let geometry = vec![
             Vertex {
-                position: Vec4::new(0.5, -0.5, 0.0, 1.0),
-                color: Vec4::new(1.0, 0.0, 0.0, 1.0),
+                position: vec4f(0.5, -0.5, 0.0, 1.0),
+                color: vec4f(1.0, 0.0, 0.0, 1.0),
                 ..Default::default()
             },
             Vertex {
-                position: Vec4::new(0.0, 0.5, 0.0, 1.0),
-                color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+                position: vec4f(0.0, 0.5, 0.0, 1.0),
+                color: vec4f(0.0, 1.0, 0.0, 1.0),
                 ..Default::default()
             },
             Vertex {
-                position: Vec4::new(-0.5, -0.5, 0.0, 1.0),
-                color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+                position: vec4f(-0.5, -0.5, 0.0, 1.0),
+                color: vec4f(0.0, 0.0, 1.0, 1.0),
                 ..Default::default()
             },
             Vertex {
-                position: Vec4::new(-1.0, 1.0, 0.0, 1.0),
-                color: Vec4::new(1.0, 0.0, 0.0, 1.0),
+                position: vec4f(-1.0, 1.0, 0.0, 1.0),
+                color: vec4f(1.0, 0.0, 0.0, 1.0),
                 ..Default::default()
             },
             Vertex {
-                position: Vec4::new(-1.0, 0.0, 0.0, 1.0),
-                color: Vec4::new(0.0, 1.0, 0.0, 1.0),
+                position: vec4f(-1.0, 0.0, 0.0, 1.0),
+                color: vec4f(0.0, 1.0, 0.0, 1.0),
                 ..Default::default()
             },
             Vertex {
-                position: Vec4::new(0.0, 1.0, 0.0, 1.0),
-                color: Vec4::new(0.0, 0.0, 1.0, 1.0),
+                position: vec4f(0.0, 1.0, 0.0, 1.0),
+                color: vec4f(0.0, 0.0, 1.0, 1.0),
                 ..Default::default()
             },
         ];
@@ -523,8 +523,8 @@ mod test {
     fn cpuslab_sanity() {
         let mut slab = CpuSlab::new(vec![]);
         let v = Vertex {
-            position: Vec4::new(0.5, -0.5, 0.0, 1.0),
-            color: Vec4::new(1.0, 0.0, 0.0, 1.0),
+            position: vec4f(0.5, -0.5, 0.0, 1.0),
+            color: vec4f(1.0, 0.0, 0.0, 1.0),
             ..Default::default()
         };
         let id = slab.append(&v);
@@ -546,35 +546,19 @@ mod test {
     fn all_primitives() {
         #[derive(Clone, Copy, Debug, Default, PartialEq, SlabItem)]
         struct Primitives {
-            i8_: i8,
-            u8_: u8,
-            i16_: i16,
-            u16_: u16,
             i32_: i32,
             u32_: u32,
-            i64_: i64,
-            u64_: u64,
-            i128_: i128,
-            u128_: u128,
             flag: bool,
             f32_: f32,
-            f64_: f64,
+            pos: Vec2f,
         }
 
         let value = Primitives {
-            i8_: -5,
-            u8_: 5,
-            i16_: -5,
-            u16_: 5,
             i32_: -5,
             u32_: 5,
-            i64_: -5,
-            u64_: 5,
-            i128_: -5,
-            u128_: 5,
             flag: false,
             f32_: 1.0,
-            f64_: 1.0,
+            pos: vec2f(2.5, -2.5),
         };
 
         let mut slab = CpuSlab::new(vec![]);
