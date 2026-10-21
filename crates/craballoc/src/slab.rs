@@ -39,7 +39,16 @@ pub enum SlabAllocatorError {
     Poll { source: wgpu::PollError },
 
     #[snafu(display("{source}"))]
+    MapRange { source: wgpu::MapRangeError },
+
+    #[snafu(display("{source}"))]
     Other { source: Box<dyn std::error::Error> },
+}
+
+impl From<wgpu::MapRangeError> for SlabAllocatorError {
+    fn from(source: wgpu::MapRangeError) -> Self {
+        Self::MapRange { source }
+    }
 }
 
 /// A thin wrapper around a buffer `T` that provides the ability to tell

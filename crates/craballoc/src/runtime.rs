@@ -283,7 +283,10 @@ impl IsRuntime for WgpuRuntime {
         });
         tracing::trace_span!("poll").in_scope(|| {
             self.device
-                .poll(wgpu::PollType::WaitForSubmissionIndex(submission_index))
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission_index),
+                    timeout: None,
+                })
                 .context(PollSnafu)
         })?;
         rx.recv()
@@ -291,10 +294,12 @@ impl IsRuntime for WgpuRuntime {
             .await
             .context(AsyncRecvSnafu)?
             .context(AsyncSnafu)?;
-        let output = tracing::trace_span!("get_mapped").in_scope(|| {
-            let bytes = buffer_slice.get_mapped_range();
-            bytemuck::cast_slice(bytes.deref()).to_vec()
-        });
+        let output = tracing::trace_span!("get_mapped").in_scope(
+            || -> Result<Vec<u32>, SlabAllocatorError> {
+                let bytes = buffer_slice.get_mapped_range()?;
+                Ok(bytemuck::cast_slice(bytes.deref()).to_vec())
+            },
+        )?;
         Ok(output)
     }
 }
