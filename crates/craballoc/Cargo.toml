@@ -31,5 +31,5 @@ futures-lite.workspace = true
 glam.workspace = true
 pretty_assertions.workspace = true
 proptest.workspace = true
-wgsl-rs-linkage-wgpu = { workspace = true, default-features = false, features = ["v29"] }
+wgsl-rs-linkage-wgpu = { workspace = true, default-features = false, features = ["v30"] }
 wgsl-rs.workspace = true

@@ -9,7 +9,7 @@ use std::{
 use snafu::ResultExt;
 use tracing::Instrument;
 
-use crate::{AsyncRecvSnafu, AsyncSnafu, Error, PollSnafu};
+use crate::{AsyncRecvSnafu, AsyncSnafu, Error, MapRangeSnafu, PollSnafu};
 
 /// Represents the runtime that provides the interface to the GPU buffer.
 ///
@@ -262,10 +262,10 @@ impl IsRuntime for WgpuRuntime {
             .await
             .context(AsyncRecvSnafu)?
             .context(AsyncSnafu)?;
-        let output = tracing::trace_span!("get_mapped").in_scope(|| {
-            let bytes = buffer_slice.get_mapped_range();
-            bytemuck::cast_slice(bytes.deref()).to_vec()
-        });
+        let bytes = tracing::trace_span!("get_mapped")
+            .in_scope(|| buffer_slice.get_mapped_range())
+            .context(MapRangeSnafu)?;
+        let output = bytemuck::cast_slice(bytes.deref()).to_vec();
         Ok(output)
     }
 }

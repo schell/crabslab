@@ -458,6 +458,26 @@ impl<R: IsRuntime> Arena<R> {
         self.bump_allocator.buffer_creation_time()
     }
 
+    /// Returns the number of u32 slots currently backing the arena's slab
+    /// buffer, from which it allocates.
+    ///
+    /// This grows on demand (doubling) whenever an allocation would not fit
+    /// within the current buffer, and never shrinks.
+    pub fn capacity(&self) -> u32 {
+        self.bump_allocator.capacity()
+    }
+
+    /// Returns the number of u32 slots ever carved out of the arena's
+    /// buffer: a monotonically growing high-water mark.
+    ///
+    /// Recycled values reuse already-allocated `Range`s and do not increase
+    /// this count, so the number of live values may be less than the length
+    /// reported here. This is always less than or equal to
+    /// [`capacity`](Self::capacity).
+    pub fn length(&self) -> u32 {
+        self.bump_allocator.length()
+    }
+
     /// Deque space from recycle ranges or alloc new space for values.
     fn new_update_source(&self, data: Vec<u32>, ty: &'static str) -> CpuUpdateSource {
         if let Some(spaces) = NonZeroU32::new(data.len() as u32) {

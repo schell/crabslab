@@ -65,6 +65,14 @@ pub enum Error {
         source: wgpu::PollError,
     },
 
+    #[cfg(feature = "wgpu")]
+    /// A buffer mapped-range error.
+    #[snafu(display("Get mapped range error: {source}"))]
+    MapRange {
+        /// The underlying wgpu error.
+        source: wgpu::MapRangeError,
+    },
+
     /// Another error.
     #[snafu(display("{source}"))]
     Other {
@@ -85,6 +93,7 @@ fn wgpu_runtime() -> crate::runtime::WgpuRuntime {
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .unwrap();
     let (device, queue) =

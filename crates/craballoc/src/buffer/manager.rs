@@ -25,6 +25,7 @@ pub struct BumpAllocator<R: IsRuntime> {
     runtime: R,
 
     buffer_length: Arc<AtomicU32>,
+    // Not an atomic u32 because we double it to allocate space.
     buffer_capacity: Arc<RwLock<u32>>,
     buffer_usages: Option<R::BufferUsages>,
     buffer_needs_expansion: Arc<AtomicBool>,
@@ -107,8 +108,23 @@ impl<R: IsRuntime> BumpAllocator<R> {
     }
 
     /// The managed buffer's current capacity, in `u32` slots.
+    ///
+    /// This is the size of the buffer as it currently exists; it grows
+    /// (doubling) on demand via [`alloc`](Self::alloc) and never shrinks.
+    /// The length always fits within the capacity.
     pub fn capacity(&self) -> u32 {
         *self.buffer_capacity.read().unwrap()
+    }
+
+    /// The managed buffer's length: the total number of `u32` slots ever
+    /// allocated from the buffer, as a monotonically growing counter.
+    ///
+    /// Freed range recycling happens a layer up (in the `Arena`), so this
+    /// is the buffer-management layer's allocated-slots high-water mark.
+    /// This is always less than or equal to [`capacity`](Self::capacity).
+    pub fn length(&self) -> u32 {
+        self.buffer_length
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Returns whether the buffer needs to be expanded.

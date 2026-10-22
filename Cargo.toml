@@ -24,7 +24,7 @@ proptest = "1.9.0"
 rustc-hash = "1.1"
 snafu = "0.8"
 tracing = "0.1.41"
-wgpu = "29"
-wgsl-rs = { path = "/Users/schell/code/wgsl-rs/fix-inherent-impl-self-and-turbofish/crates/wgsl-rs" }# git = "https://github.com/schell/wgsl-rs" }
-wgsl-rs-linkage-wgpu = {  path = "/Users/schell/code/wgsl-rs/fix-inherent-impl-self-and-turbofish/crates/wgsl-rs-linkage-wgpu" }#git = "https://github.com/schell/wgsl-rs" }
+wgpu = "30"
+wgsl-rs = { path = "/Users/schell/code/wgsl-rs/main/crates/wgsl-rs" }# git = "https://github.com/schell/wgsl-rs" }
+wgsl-rs-linkage-wgpu = {  path = "/Users/schell/code/wgsl-rs/main/crates/wgsl-rs-linkage-wgpu" }#git = "https://github.com/schell/wgsl-rs" }
 

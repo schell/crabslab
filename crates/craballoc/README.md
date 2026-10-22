@@ -70,11 +70,11 @@ One definition, two worlds: the CPU allocates a `Lamp` with
 ```rust
 use craballoc::prelude::*;
 use wgsl_rs::wgsl;
-use wgsl_rs_linkage_wgpu::v29 as wgpu_linkage;
+use wgsl_rs_linkage_wgpu::v30 as wgpu_linkage;
 
 #[wgsl(extensions = [crabslab::SlabItemExt])]
 mod lamp_shader {
-    use crabslab::slab_item::*;
+    use crabslab::*;
     use wgsl_rs::std::*;
 
     /// A lamp in the scene, shared between CPU and GPU code. The derive
@@ -107,6 +107,7 @@ mod lamp_shader {
 #     power_preference: wgpu::PowerPreference::default(),
 #     compatible_surface: None,
 #     force_fallback_adapter: false,
+#     apply_limit_buckets: false,
 # }))
 # .unwrap();
 # let (device, queue) = futures_lite::future::block_on(
