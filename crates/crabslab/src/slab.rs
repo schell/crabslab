@@ -81,6 +81,15 @@ pub trait Slab {
         }
     }
 
+    /// Read the type from the slab using the [`Id`] as the index, or return `None`.
+    fn read_maybe<T: SlabItem + Clone>(&self, id: Id<T>) -> Option<T> {
+        if self.contains(id) {
+            Some(self.read_unchecked(id))
+        } else {
+            None
+        }
+    }
+
     /// Read the type from the slab using the [`Id`] as the index.
     fn read_unchecked<T: SlabItem + Clone>(&self, id: Id<T>) -> T;
 

@@ -208,7 +208,7 @@ impl<T: ?Sized, S> Clone for Value<T, S> {
     }
 }
 
-impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
+impl<T: Clone + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
     /// Return the [`Id<T>`] that points to this `T` on the slab.
     pub fn id(&self) -> Id<T> {
         Id::new(self.update_source.source_id().range.first_index)
@@ -220,19 +220,11 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Syn
         Array::new(self.id(), 1)
     }
 
-    /// Modify the inner value, queing an update to the GPU.
-    pub fn modify<X>(&self, f: impl FnOnce(&mut T) -> X) -> X {
-        self.update_source.modify(|data| {
-            let mut t = data.read(Id::<T>::zero());
-            let x = f(&mut t);
-            data.write(Id::zero(), &t);
-            x
-        })
-    }
-
     /// Set the inner value, queing the update to the GPU.
     pub fn set(&self, t: T) {
-        self.modify(|data| *data = t);
+        self.update_source.modify(|data| {
+            data.write(Id::zero(), &t);
+        });
     }
 
     /// Get a copy of the value from the local CPU cache.
@@ -242,7 +234,19 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Syn
     }
 }
 
-impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], Sync> {
+impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
+    /// Modify the cached CPU value, queing an update to the GPU.
+    pub fn modify<X>(&self, f: impl FnOnce(&mut T) -> X) -> X {
+        self.update_source.modify(|data| {
+            let mut t = data.read(Id::<T>::zero());
+            let x = f(&mut t);
+            data.write(Id::zero(), &t);
+            x
+        })
+    }
+}
+
+impl<T: Clone + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], Sync> {
     /// The length of the inner array.
     pub fn len(&self) -> usize {
         let u32_size = self.update_source.source_id().range.len() as usize;
@@ -262,6 +266,22 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
         range
     }
 
+    /// Returns the [`Array`] that these values occupy in the slab.
+    pub fn array(&self) -> Array<T> {
+        let len = self.len() as u32;
+        Array {
+            id: Id::new(self.update_source.source_id().range.first_index),
+            len,
+        }
+    }
+
+    /// Returns the ranges that have been updated since last commit.
+    pub fn updated_ranges(&self) -> Vec<Range> {
+        self.update_source.updated_ranges()
+    }
+}
+
+impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], Sync> {
     /// Modify a range inner values, queing an update to the GPU.
     pub fn modify_range<X>(&self, range: impl Into<Range>, f: impl FnOnce(&mut [T]) -> X) -> X {
         let input_range = self.sanitize_range(range);
@@ -308,20 +328,6 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], S
     /// Returns a copy of the array items.
     pub fn get_vec(&self) -> Vec<T> {
         self.read_range(.., |data| data.to_vec())
-    }
-
-    /// Returns the [`Array`] that these values occupy in the slab.
-    pub fn array(&self) -> Array<T> {
-        let len = self.len() as u32;
-        Array {
-            id: Id::new(self.update_source.source_id().range.first_index),
-            len,
-        }
-    }
-
-    /// Returns the ranges that have been updated since last commit.
-    pub fn updated_ranges(&self) -> Vec<Range> {
-        self.update_source.updated_ranges()
     }
 }
 
