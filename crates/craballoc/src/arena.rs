@@ -407,7 +407,7 @@ impl<T: Clone + SlabItem + Sized, Sync: CanUpdateFromCpu, const KEEP_CACHE: bool
     }
 }
 
-impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
+impl<T: Clone + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
     /// Get a copy of the value from the local CPU cache.
     ///
     /// Only available on the type `Value<T, Sync, **true**>` - as the value must have the CPU
@@ -416,7 +416,9 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Syn
         self.update_source
             .read(|data| data.read_unchecked(Id::zero()))
     }
+}
 
+impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
     /// Modify the cached CPU value, queing an update to the GPU.
     ///
     /// Only available on the type `Value<T, Sync, **true**>` - as the value must have the CPU
