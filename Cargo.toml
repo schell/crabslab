@@ -26,5 +26,4 @@ snafu = "0.8"
 tracing = "0.1.41"
 wgpu = "30"
 wgsl-rs = { git = "https://github.com/schell/wgsl-rs", branch = "main" }
-wgsl-rs-linkage-wgpu = { git = "https://github.com/schell/wgsl-rs", branch = "main" }
-
+wgsl-rs-linkage-wgpu = { git = "https://github.com/schell/wgsl-rs", branch = "main", default-features = false, features = ["v30"] }

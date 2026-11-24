@@ -20,8 +20,11 @@ use crate::{
     buffer::{manager::BumpAllocator, SlabBuffer},
     range::{Range, RangeManager},
     runtime::IsRuntime,
-    update::{CpuUpdateSource, GpuUpdates, SourceId, Update, UpdateManager, UpdateSummary},
-    Error, NoInternalBufferSnafu,
+    update::{
+        CpuData, CpuUpdateSource, GpuUpdates, SourceId, SourceMessage, Update, UpdateManager,
+        UpdateSummary,
+    },
+    Error, NoInternalBufferSnafu, ValueDroppedSnafu,
 };
 
 /// Marker for the sync directions whose values queue CPU edits for the
@@ -43,6 +46,109 @@ pub struct SyncOneWayFromGpu;
 /// Value is not updated.
 pub struct SyncNone;
 
+/// A weak reference to a RAII slab value.
+///
+/// These can be created by calling [`Value::downgrade`]. Holding a `WeakValue`
+/// does not prevent the underlying slab data from being recycled.
+///
+/// Unlike [`std::sync::Weak`], this type deliberately does not provide an
+/// `upgrade` that returns a [`Value`]. A `Value`'s type parameters mirror
+/// runtime registration state (sync direction and cache clearing) that can
+/// change through the strong handle's `into_*` conversions, so a handle
+/// minted from a weak would either carry stale types or claim defaults that
+/// do not match the registration. Instead:
+///
+/// * probe and address the value with [`WeakValue::is_alive`],
+///   [`WeakValue::slab_range`], [`WeakValue::id`] and [`WeakValue::array`]
+/// * write it with [`WeakValue::set`], which borrows the value's source
+///   privately and never exposes a handle
+///
+/// If you need the typed handle itself, ask the owner that created it.
+#[derive(Clone)]
+pub struct WeakValue<T: ?Sized> {
+    source: SourceId,
+    data: CpuData,
+    sender: async_channel::Sender<SourceMessage>,
+    _phantom: PhantomData<T>,
+}
+
+impl<T: ?Sized> std::fmt::Debug for WeakValue<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WeakValue")
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+impl<T: ?Sized> WeakValue<T> {
+    /// Returns `true` when there are one or more `Value`s that reference the same
+    /// underlying data as this `WeakValue`.
+    pub fn is_alive(&self) -> bool {
+        self.data.synchronization.strong_count() > 0
+    }
+
+    /// Returns the slab range of the underlying data.
+    pub fn slab_range(&self) -> Range {
+        self.source.range
+    }
+}
+
+impl<T> WeakValue<T> {
+    /// Returns the slab identifier of the value.
+    pub fn id(&self) -> Id<T> {
+        Id::new(self.source.range.first_index)
+    }
+
+    /// Returns the slab array of the value.
+    pub fn array(&self) -> Array<T> {
+        Array::new(self.id(), 1)
+    }
+}
+
+impl<T: SlabItem> WeakValue<[T]> {
+    /// Returns the slab array of the value.
+    pub fn array(&self) -> Array<T> {
+        let id = Id::<T>::new(self.source.range.first_index);
+        Array::new(id, self.len() as u32)
+    }
+
+    /// Returns whether the array is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The number of elements in the array.
+    pub fn len(&self) -> usize {
+        self.source.range.len() as usize / T::SLAB_SIZE
+    }
+}
+
+impl<T: SlabItem + Clone + Sized> WeakValue<T> {
+    /// Set the value, if it is still alive.
+    ///
+    /// The write is queued for the next [`Arena::commit`], exactly like
+    /// [`Value::set`]. This does not hand out a `Value` handle, so it
+    /// makes no claims about the value's synchronization direction or
+    /// cache registration.
+    ///
+    /// # Errors
+    ///
+    /// Errors if the value has been dropped.
+    pub fn set(&self, t: T) -> Result<(), Error> {
+        let synchronization = self
+            .data
+            .synchronization
+            .upgrade()
+            .context(ValueDroppedSnafu { id: self.source })?;
+        let update_source =
+            CpuUpdateSource::from_parts(self.source, self.sender.clone(), synchronization);
+        update_source.modify(|data| {
+            data.write(Id::zero(), &t);
+        });
+        Ok(())
+    }
+}
+
 /// A RAII slab value.
 ///
 /// A `Value<T>` is a handle to a `T` allocated on an [`Arena`]: it
@@ -63,15 +169,28 @@ pub struct SyncNone;
 /// and a commit or synchronize in progress briefly holds extra strong
 /// references, so the count can over-report - the guard then fails
 /// safe, refusing an otherwise valid conversion.
-pub struct Value<T: ?Sized, Sync = SyncBidirectional> {
+pub struct Value<T: ?Sized, Sync = SyncBidirectional, const KEEP_CACHE: bool = true> {
     update_source: CpuUpdateSource,
     _phantom: PhantomData<(Sync, T)>,
 }
 
-impl<T: ?Sized, Sync> Value<T, Sync> {
+impl<T: ?Sized, Sync, const KEEP_CACHE: bool> Value<T, Sync, KEEP_CACHE> {
     #[cfg(test)]
     pub(crate) fn ref_count(&self) -> usize {
         self.update_source.ref_count()
+    }
+
+    /// Returns a weak reference to the value.
+    ///
+    /// Holding this reference will not keep a value's allocated space in the slab from being recycled.
+    pub fn downgrade(&self) -> WeakValue<T> {
+        let (source, sender, weak_update_source) = self.update_source.downgraded_parts();
+        WeakValue {
+            source,
+            data: weak_update_source,
+            sender,
+            _phantom: PhantomData,
+        }
     }
 
     /// Returns the u32 [`Range`] that this value occupies on the slab.
@@ -88,7 +207,9 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
     /// original value unchanged. Changing direction re-registers the
     /// shared source, so it is only allowed through the value's sole
     /// live handle.
-    pub fn into_bidirectional(self) -> Result<Value<T, SyncBidirectional>, Value<T, Sync>> {
+    pub fn into_bidirectional(
+        self,
+    ) -> Result<Value<T, SyncBidirectional>, Value<T, Sync, KEEP_CACHE>> {
         if self.update_source.handle_count() != 1 {
             return Err(self);
         }
@@ -109,7 +230,9 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
     /// original value unchanged. Changing direction re-registers the
     /// shared source, so it is only allowed through the value's sole
     /// live handle.
-    pub fn into_one_way_from_cpu(self) -> Result<Value<T, SyncOneWayFromCpu>, Value<T, Sync>> {
+    pub fn into_one_way_from_cpu(
+        self,
+    ) -> Result<Value<T, SyncOneWayFromCpu, KEEP_CACHE>, Value<T, Sync, KEEP_CACHE>> {
         if self.update_source.handle_count() != 1 {
             return Err(self);
         }
@@ -130,7 +253,9 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
     /// original value unchanged. Changing direction re-registers the
     /// shared source, so it is only allowed through the value's sole
     /// live handle.
-    pub fn into_one_way_from_gpu(self) -> Result<Value<T, SyncOneWayFromGpu>, Value<T, Sync>> {
+    pub fn into_one_way_from_gpu(
+        self,
+    ) -> Result<Value<T, SyncOneWayFromGpu, KEEP_CACHE>, Value<T, Sync, KEEP_CACHE>> {
         if self.update_source.handle_count() != 1 {
             return Err(self);
         }
@@ -150,7 +275,9 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
     /// original value unchanged. Changing direction re-registers the
     /// shared source, so it is only allowed through the value's sole
     /// live handle.
-    pub fn into_sync_none(self) -> Result<Value<T, SyncNone>, Value<T, Sync>> {
+    pub fn into_sync_none(
+        self,
+    ) -> Result<Value<T, SyncNone, KEEP_CACHE>, Value<T, Sync, KEEP_CACHE>> {
         if self.update_source.handle_count() != 1 {
             return Err(self);
         }
@@ -185,9 +312,59 @@ impl<T: ?Sized, Sync> Value<T, Sync> {
         self.update_source.set_gpu_sync(should_sync);
         Ok(())
     }
+
+    /// Convert to a type that keeps the CPU cache, instead of clearing it after commit.
+    ///
+    /// The returned type is the default cached value type.
+    ///
+    /// If converting from a clear-after-commit `Value`, i.e. one where `KEEP_CACHE = false`,
+    /// the cached value will be freshly initialized (zeroed data) until after `Arena::synchronize`
+    /// is called.
+    ///
+    /// # Errors
+    ///
+    /// Fails while other handles to this value exist, returning the
+    /// original value unchanged. Changing cacheing re-registers the
+    /// shared source, so it is only allowed through the value's sole
+    /// live handle.
+    pub fn into_keep_cpu_cache(self) -> Result<Value<T, Sync, true>, Self> {
+        if self.update_source.handle_count() != 1 {
+            return Err(self);
+        }
+        self.update_source.set_keep_cache(true);
+        self.update_source.reinitialize_data();
+        Ok(Value {
+            update_source: self.update_source,
+            _phantom: PhantomData,
+        })
+    }
+
+    /// Convert to a type that clears the CPU cache after commit.
+    ///
+    /// This is useful in situations where you need to marshal a large value to the GPU
+    /// sporadically, and don't want the data in memory between frames.
+    ///
+    /// The cache will only be cleared _after_ [`Arena::commit`] is called.
+    ///
+    /// # Errors
+    ///
+    /// Fails while other handles to this value exist, returning the
+    /// original value unchanged. Changing cacheing re-registers the
+    /// shared source, so it is only allowed through the value's sole
+    /// live handle.
+    pub fn into_clear_cpu_cache(self) -> Result<Value<T, Sync, false>, Self> {
+        if self.update_source.handle_count() != 1 {
+            return Err(self);
+        }
+        self.update_source.set_keep_cache(false);
+        Ok(Value {
+            update_source: self.update_source,
+            _phantom: PhantomData,
+        })
+    }
 }
 
-impl<T: ?Sized, S> std::fmt::Debug for Value<T, S> {
+impl<T: ?Sized, S, const KEEP_CACHE: bool> std::fmt::Debug for Value<T, S, KEEP_CACHE> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(&format!(
             "Value<{}, {}>",
@@ -199,7 +376,7 @@ impl<T: ?Sized, S> std::fmt::Debug for Value<T, S> {
     }
 }
 
-impl<T: ?Sized, S> Clone for Value<T, S> {
+impl<T: ?Sized, S, const KEEP_CACHE: bool> Clone for Value<T, S, KEEP_CACHE> {
     fn clone(&self) -> Self {
         Self {
             update_source: self.update_source.clone(),
@@ -208,7 +385,9 @@ impl<T: ?Sized, S> Clone for Value<T, S> {
     }
 }
 
-impl<T: Clone + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
+impl<T: Clone + SlabItem + Sized, Sync: CanUpdateFromCpu, const KEEP_CACHE: bool>
+    Value<T, Sync, KEEP_CACHE>
+{
     /// Return the [`Id<T>`] that points to this `T` on the slab.
     pub fn id(&self) -> Id<T> {
         Id::new(self.update_source.source_id().range.first_index)
@@ -226,16 +405,22 @@ impl<T: Clone + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
             data.write(Id::zero(), &t);
         });
     }
+}
 
+impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
     /// Get a copy of the value from the local CPU cache.
+    ///
+    /// Only available on the type `Value<T, Sync, **true**>` - as the value must have the CPU
+    /// cache available to read it.
     pub fn get(&self) -> T {
         self.update_source
             .read(|data| data.read_unchecked(Id::zero()))
     }
-}
 
-impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Sync> {
     /// Modify the cached CPU value, queing an update to the GPU.
+    ///
+    /// Only available on the type `Value<T, Sync, **true**>` - as the value must have the CPU
+    /// cache available to modify.
     pub fn modify<X>(&self, f: impl FnOnce(&mut T) -> X) -> X {
         self.update_source.modify(|data| {
             let mut t = data.read(Id::<T>::zero());
@@ -246,7 +431,9 @@ impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<T, Syn
     }
 }
 
-impl<T: Clone + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], Sync> {
+impl<T: Clone + SlabItem + Sized, Sync: CanUpdateFromCpu, const KEEP_CACHE: bool>
+    Value<[T], Sync, KEEP_CACHE>
+{
     /// The length of the inner array.
     pub fn len(&self) -> usize {
         let u32_size = self.update_source.source_id().range.len() as usize;
@@ -283,6 +470,9 @@ impl<T: Clone + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], Sync> {
 
 impl<T: Clone + Default + SlabItem + Sized, Sync: CanUpdateFromCpu> Value<[T], Sync> {
     /// Modify a range inner values, queing an update to the GPU.
+    ///
+    /// Only available on the type `Value<[T], Sync, **true**>` - as the value must have the CPU
+    /// cache available to modify.
     pub fn modify_range<X>(&self, range: impl Into<Range>, f: impl FnOnce(&mut [T]) -> X) -> X {
         let input_range = self.sanitize_range(range);
         let len = input_range.len();
@@ -696,5 +886,153 @@ mod test {
         let v = v.into_bidirectional().expect("unique handle");
         v.set(200);
         assert_eq!(200, v.get());
+    }
+
+    #[test]
+    fn clear_cpu_cache_after_commit() {
+        let arena = Arena::new(&CpuRuntime, "clear-cpu-cache", None);
+        let v = arena.new_value(666u32);
+        let range = v.slab_range();
+        let v = v.into_clear_cpu_cache().expect("unique handle");
+
+        // The initial data uploads, then the cache is cleared at the same commit.
+        arena.commit();
+        let vs = arena.get_buffer().unwrap().as_vec().clone();
+        assert_eq!(666, vs[range.first_index as usize]);
+        assert_eq!(0, v.update_source.read(|data| data.len()));
+    }
+
+    #[test]
+    fn clear_cpu_cache_survives_idle_commits() {
+        let arena = Arena::new(&CpuRuntime, "clear-cpu-cache-idle", None);
+        let v = arena.new_value(666u32);
+        let range = v.slab_range();
+        arena.commit();
+
+        let v = v.into_clear_cpu_cache().expect("unique handle");
+        // No edits after the conversion; the pre-conversion cache must not linger.
+        arena.commit();
+
+        assert_eq!(0, v.update_source.read(|data| data.len()));
+        let vs = arena.get_buffer().unwrap().as_vec().clone();
+        assert_eq!(666, vs[range.first_index as usize]);
+    }
+
+    #[test]
+    fn set_rematerializes_cleared_cache() {
+        let arena = Arena::new(&CpuRuntime, "clear-cpu-cache-set", None);
+        let v = arena.new_value(666u32);
+        let range = v.slab_range();
+        let v = v.into_clear_cpu_cache().expect("unique handle");
+        arena.commit();
+        assert_eq!(0, v.update_source.read(|data| data.len()));
+
+        // set() re-materializes the cache and queues the upload...
+        v.set(777);
+        assert_eq!(1, v.update_source.read(|data| data.len()));
+
+        // ...commit uploads it and clears again.
+        arena.commit();
+        let vs = arena.get_buffer().unwrap().as_vec().clone();
+        assert_eq!(777, vs[range.first_index as usize]);
+        assert_eq!(0, v.update_source.read(|data| data.len()));
+    }
+
+    #[test]
+    fn keep_cpu_cache_default_untouched() {
+        let arena = Arena::new(&CpuRuntime, "keep-cpu-cache", None);
+        let v = arena.new_value(666u32);
+        let range = v.slab_range();
+        arena.commit();
+        assert_eq!(
+            range.len() as usize,
+            v.update_source.read(|data| data.len())
+        );
+        assert_eq!(666, v.get());
+    }
+
+    #[test]
+    fn keep_cpu_cache_conversion_does_not_upload_zeros() {
+        let arena = Arena::new(&CpuRuntime, "keep-cpu-cache-conversion", None);
+        let v = arena.new_value(666u32);
+        let range = v.slab_range();
+        let v = v.into_clear_cpu_cache().expect("unique handle");
+        arena.commit();
+        assert_eq!(0, v.update_source.read(|data| data.len()));
+
+        // Converting back re-materializes zeros locally...
+        let v = v.into_keep_cpu_cache().expect("unique handle");
+        assert_eq!(1, v.update_source.read(|data| data.len()));
+
+        // ...but must NOT queue those zeros for upload.
+        arena.commit();
+        let vs = arena.get_buffer().unwrap().as_vec().clone();
+        assert_eq!(
+            666, vs[range.first_index as usize],
+            "conversion to keep-cache must not overwrite the GPU data with zeros"
+        );
+        assert_eq!(0, v.get(), "local cache is zeros until synchronize");
+    }
+
+    #[test]
+    fn weak_value_set_while_alive() {
+        let arena = Arena::new(&CpuRuntime, "weak-set", None);
+        let v = arena.new_value(666u32);
+        let range = v.slab_range();
+        let weak = v.downgrade();
+
+        assert!(weak.is_alive());
+        weak.set(777).expect("value is alive");
+        arena.commit();
+        let vs = arena.get_buffer().unwrap().as_vec().clone();
+        assert_eq!(777, vs[range.first_index as usize]);
+        assert_eq!(777, v.get());
+    }
+
+    #[test]
+    fn weak_value_set_after_drop() {
+        let arena = Arena::new(&CpuRuntime, "weak-set-dead", None);
+        let weak = {
+            let v = arena.new_value(666u32);
+            v.downgrade()
+        };
+        assert!(!weak.is_alive());
+        assert!(matches!(weak.set(777), Err(Error::ValueDropped { .. })));
+    }
+
+    #[test]
+    fn weak_value_does_not_prevent_recycle() {
+        let arena = Arena::new(&CpuRuntime, "weak-recycle", None);
+        let weak = {
+            let v = arena.new_value(666u32);
+            v.downgrade()
+        };
+        arena.commit();
+        assert!(
+            arena.recycle_spaces() >= 1,
+            "range should be recycled despite the weak"
+        );
+        assert!(!weak.is_alive());
+    }
+
+    #[test]
+    fn weak_value_no_crosstalk_after_realloc() {
+        let arena = Arena::new(&CpuRuntime, "weak-realloc", None);
+        let weak = {
+            let v = arena.new_value(666u32);
+            v.downgrade()
+        };
+        arena.commit();
+
+        // A new value may reuse the recycled range; the old weak must stay dead.
+        let v2 = arena.new_value(777u32);
+        arena.commit();
+        assert_eq!(weak.slab_range(), v2.slab_range(), "range was reused");
+        assert!(
+            matches!(weak.set(888), Err(Error::ValueDropped { .. })),
+            "old weak must not write"
+        );
+        assert!(!weak.is_alive());
+        assert_eq!(777, v2.get(), "new value must be untouched");
     }
 }

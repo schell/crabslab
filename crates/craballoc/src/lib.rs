@@ -6,6 +6,8 @@
 
 use snafu::prelude::*;
 
+use crate::update::SourceId;
+
 pub mod arena;
 pub mod buffer;
 pub mod range;
@@ -71,6 +73,13 @@ pub enum Error {
     MapRange {
         /// The underlying wgpu error.
         source: wgpu::MapRangeError,
+    },
+
+    /// A value was dropped before it could be written.
+    #[snafu(display("cannot set {id}: the value has been dropped"))]
+    ValueDropped {
+        /// The slab source of the dropped value.
+        id: SourceId,
     },
 
     /// Another error.
