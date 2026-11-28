@@ -51,6 +51,9 @@ pub fn array_index_mut<const N: usize, T>(slab: &mut [T; N], index: usize) -> &m
 #[wgsl_rs::wgsl]
 pub mod wgsl {
     //! Standard WGSL shader prelude, meant to be glob imported into `wgsl-rs` modules.
+    #[cfg(feature = "glm")]
+    use wgsl_rs::glm::*;
+    #[cfg(not(feature = "glm"))]
     use wgsl_rs::std::*;
 
     #[wgsl_ignore]
@@ -764,6 +767,34 @@ pub mod wgsl {
                 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32,
                 0u32, 0u32,
             ]
+        }
+    }
+
+    #[cfg(feature = "glm")]
+    impl SlabItem for Quat {
+        const SLAB_SIZE: usize = 4;
+        type Array = [u32; 4];
+
+        fn to_array(data: Self) -> [u32; 4] {
+            [
+                bitcast_u32(data.x),
+                bitcast_u32(data.y),
+                bitcast_u32(data.z),
+                bitcast_u32(data.w),
+            ]
+        }
+
+        fn from_array(array: [u32; 4]) -> Self {
+            Quat {
+                x: bitcast_f32(array[0]),
+                y: bitcast_f32(array[1]),
+                z: bitcast_f32(array[2]),
+                w: bitcast_f32(array[3]),
+            }
+        }
+
+        fn array_container() -> [u32; 4] {
+            [0, 0, 0, 0]
         }
     }
 
